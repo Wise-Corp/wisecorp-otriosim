@@ -1,0 +1,585 @@
+"""
+Otrio Game - Colored Petri Net Implementation
+
+Model structure:
+- 2 initial places (Blue_Initial, Red_Initial) - each starts with 9 tokens (3 of each size)
+- 18 board places (9 per player): Blue_A1..Blue_C3, Red_A1..Red_C3
+- Token colors: SMALL (light-gray), MEDIUM (dark-gray), LARGE (black)
+- Each board place can hold at most 1 token of each size
+
+Win conditions:
+1. Three nested pieces (all three sizes) in one space
+2. Three same-sized pieces in a row/column/diagonal
+3. Three ascending/descending sizes in a row/column/diagonal
+"""
+
+from cpnpy.cpn.cpn_imp import (
+    CPN, Place, Transition, Arc, Marking, EvaluationContext,
+    EnumeratedColorSet
+)
+from collections import defaultdict
+import copy
+
+
+# =============================================================================
+# Color Set Definitions
+# =============================================================================
+
+# Token sizes (colors in CPN terminology)
+SIZE_COLORSET = EnumeratedColorSet("Size", ["SMALL", "MEDIUM", "LARGE"])
+
+
+# =============================================================================
+# Board Positions
+# =============================================================================
+
+ROWS = ["A", "B", "C"]
+COLS = ["1", "2", "3"]
+POSITIONS = [f"{r}{c}" for r in ROWS for c in COLS]  # A1, A2, ..., C3
+
+# Win lines: rows, columns, diagonals
+WIN_LINES = [
+    # Rows
+    ["A1", "A2", "A3"],
+    ["B1", "B2", "B3"],
+    ["C1", "C2", "C3"],
+    # Columns
+    ["A1", "B1", "C1"],
+    ["A2", "B2", "C2"],
+    ["A3", "B3", "C3"],
+    # Diagonals
+    ["A1", "B2", "C3"],
+    ["A3", "B2", "C1"],
+]
+
+
+# =============================================================================
+# Game State Representation (for state space exploration)
+# =============================================================================
+
+class OtrioGameState:
+    """
+    Represents the state of an Otrio game.
+
+    Board representation:
+    - board[player][position] = set of sizes placed
+    - initial[player] = multiset of remaining pieces
+    """
+
+    def __init__(self):
+        # Each player's board positions
+        self.board = {
+            "BLUE": {pos: set() for pos in POSITIONS},
+            "RED": {pos: set() for pos in POSITIONS}
+        }
+        # Initial pieces for each player (3 of each size)
+        self.initial = {
+            "BLUE": {"SMALL": 3, "MEDIUM": 3, "LARGE": 3},
+            "RED": {"SMALL": 3, "MEDIUM": 3, "LARGE": 3}
+        }
+        self.current_player = "BLUE"
+        self.winner = None
+        self.move_history = []
+
+    def copy(self):
+        """Create a deep copy of the game state."""
+        new_state = OtrioGameState()
+        new_state.board = {
+            player: {pos: sizes.copy() for pos, sizes in positions.items()}
+            for player, positions in self.board.items()
+        }
+        new_state.initial = {
+            player: counts.copy() for player, counts in self.initial.items()
+        }
+        new_state.current_player = self.current_player
+        new_state.winner = self.winner
+        new_state.move_history = self.move_history.copy()
+        return new_state
+
+    def get_valid_moves(self):
+        """Return list of valid moves for current player: (position, size)."""
+        if self.winner:
+            return []
+
+        moves = []
+        player = self.current_player
+
+        for size in ["SMALL", "MEDIUM", "LARGE"]:
+            if self.initial[player][size] > 0:
+                for pos in POSITIONS:
+                    # Can only place if that size isn't already there
+                    if size not in self.board[player][pos]:
+                        moves.append((pos, size))
+
+        return moves
+
+    def make_move(self, position, size):
+        """
+        Make a move: place a piece of given size at position.
+        Returns new state (immutable style).
+        """
+        if self.winner:
+            raise ValueError("Game already won")
+
+        player = self.current_player
+
+        if self.initial[player][size] <= 0:
+            raise ValueError(f"No {size} pieces left for {player}")
+
+        if size in self.board[player][position]:
+            raise ValueError(f"{size} already at {position} for {player}")
+
+        # Create new state
+        new_state = self.copy()
+        new_state.initial[player][size] -= 1
+        new_state.board[player][position].add(size)
+        new_state.move_history.append((player, position, size))
+
+        # Check for winner
+        new_state.winner = new_state.check_winner(player)
+
+        # Switch player
+        new_state.current_player = "RED" if player == "BLUE" else "BLUE"
+
+        return new_state
+
+    def check_winner(self, player):
+        """Check if the given player has won."""
+        board = self.board[player]
+
+        # Win condition 1: Three nested pieces in one space
+        for pos in POSITIONS:
+            if len(board[pos]) == 3:  # Has SMALL, MEDIUM, LARGE
+                return player
+
+        # Win condition 2 & 3: Three in a row (same size or ordered sizes)
+        for line in WIN_LINES:
+            # Check same size in a row
+            for size in ["SMALL", "MEDIUM", "LARGE"]:
+                if all(size in board[pos] for pos in line):
+                    return player
+
+            # Check ascending order (SMALL -> MEDIUM -> LARGE)
+            if ("SMALL" in board[line[0]] and
+                "MEDIUM" in board[line[1]] and
+                "LARGE" in board[line[2]]):
+                return player
+
+            # Check descending order (LARGE -> MEDIUM -> SMALL)
+            if ("LARGE" in board[line[0]] and
+                "MEDIUM" in board[line[1]] and
+                "SMALL" in board[line[2]]):
+                return player
+
+        return None
+
+    def to_tuple(self):
+        """Convert state to hashable tuple for state space exploration."""
+        board_tuple = tuple(
+            (player, tuple((pos, tuple(sorted(sizes)))
+                          for pos, sizes in sorted(positions.items())))
+            for player, positions in sorted(self.board.items())
+        )
+        initial_tuple = tuple(
+            (player, tuple(sorted(counts.items())))
+            for player, counts in sorted(self.initial.items())
+        )
+        return (board_tuple, initial_tuple, self.current_player)
+
+    def __hash__(self):
+        return hash(self.to_tuple())
+
+    def __eq__(self, other):
+        return self.to_tuple() == other.to_tuple()
+
+    def __str__(self):
+        """Pretty print the game state."""
+        lines = []
+        lines.append(f"Current player: {self.current_player}")
+        if self.winner:
+            lines.append(f"WINNER: {self.winner}")
+
+        lines.append("\nBLUE board:")
+        for row in ROWS:
+            row_str = f"  {row}: "
+            for col in COLS:
+                pos = f"{row}{col}"
+                sizes = self.board["BLUE"][pos]
+                size_str = "".join(s[0] for s in sorted(sizes))  # S, M, L
+                row_str += f"[{size_str:3s}] "
+            lines.append(row_str)
+
+        lines.append(f"  Remaining: {self.initial['BLUE']}")
+
+        lines.append("\nRED board:")
+        for row in ROWS:
+            row_str = f"  {row}: "
+            for col in COLS:
+                pos = f"{row}{col}"
+                sizes = self.board["RED"][pos]
+                size_str = "".join(s[0] for s in sorted(sizes))
+                row_str += f"[{size_str:3s}] "
+            lines.append(row_str)
+
+        lines.append(f"  Remaining: {self.initial['RED']}")
+
+        return "\n".join(lines)
+
+
+# =============================================================================
+# CPN Model Builder
+# =============================================================================
+
+def build_otrio_cpn():
+    """
+    Build the Colored Petri Net model for Otrio.
+
+    Structure:
+    - Places: Blue_Initial, Red_Initial, Blue_A1..Blue_C3, Red_A1..Red_C3
+    - Transitions: Blue_to_A1..Blue_to_C3, Red_to_A1..Red_to_C3
+    - Arcs connect initial places to board places via transitions
+    """
+    cpn = CPN()
+
+    # Create places dictionary for reference
+    places = {}
+
+    # Create initial places (hold the player's unplaced pieces)
+    places["Blue_Initial"] = Place("Blue_Initial", SIZE_COLORSET)
+    places["Red_Initial"] = Place("Red_Initial", SIZE_COLORSET)
+    cpn.add_place(places["Blue_Initial"])
+    cpn.add_place(places["Red_Initial"])
+
+    # Create board places for each player
+    for player in ["Blue", "Red"]:
+        for pos in POSITIONS:
+            place_name = f"{player}_{pos}"
+            places[place_name] = Place(place_name, SIZE_COLORSET)
+            cpn.add_place(places[place_name])
+
+    # Create transitions dictionary
+    transitions = {}
+
+    # Create transitions and arcs
+    for player in ["Blue", "Red"]:
+        initial_place = places[f"{player}_Initial"]
+        for pos in POSITIONS:
+            trans_name = f"{player}_to_{pos}"
+            transition = Transition(trans_name, variables=["x"])
+            transitions[trans_name] = transition
+            cpn.add_transition(transition)
+
+            # Input arc: from initial place (consume token x)
+            input_arc = Arc(initial_place, transition, "x")
+            cpn.add_arc(input_arc)
+
+            # Output arc: to board place (produce token x)
+            output_arc = Arc(transition, places[f"{player}_{pos}"], "x")
+            cpn.add_arc(output_arc)
+
+    return cpn, places, transitions
+
+
+def create_initial_marking(cpn):
+    """Create the initial marking with 9 pieces per player."""
+    marking = Marking()
+
+    # Each player starts with 3 SMALL, 3 MEDIUM, 3 LARGE
+    initial_tokens = ["SMALL"] * 3 + ["MEDIUM"] * 3 + ["LARGE"] * 3
+
+    marking.set_tokens("Blue_Initial", initial_tokens)
+    marking.set_tokens("Red_Initial", initial_tokens)
+
+    # All board places start empty
+    for player in ["Blue", "Red"]:
+        for pos in POSITIONS:
+            marking.set_tokens(f"{player}_{pos}", [])
+
+    return marking
+
+
+# =============================================================================
+# CPN-based Simulation
+# =============================================================================
+
+def get_enabled_transitions(cpn, marking, context, current_player):
+    """Get all enabled transitions for the current player."""
+    enabled = []
+    player = "Blue" if current_player == "BLUE" else "Red"
+
+    for pos in POSITIONS:
+        trans_name = f"{player}_to_{pos}"
+        transition = cpn.get_transition_by_name(trans_name)
+
+        # Find all valid bindings for this transition
+        all_bindings = cpn._find_all_bindings(transition, marking, context)
+
+        for binding in all_bindings:
+            # Check if the size isn't already in the target place
+            target_place = f"{player}_{pos}"
+            target_tokens = [t.value for t in marking.get_multiset(target_place).tokens]
+            if binding["x"] not in target_tokens:
+                enabled.append((transition, binding, pos))
+
+    return enabled
+
+
+def check_cpn_winner(marking, player):
+    """Check if a player has won based on the CPN marking."""
+    player_prefix = "Blue" if player == "BLUE" else "Red"
+
+    # Get all tokens for each position
+    board = {}
+    for pos in POSITIONS:
+        place_name = f"{player_prefix}_{pos}"
+        tokens = [t.value for t in marking.get_multiset(place_name).tokens]
+        board[pos] = set(tokens)
+
+    # Win condition 1: Three nested pieces in one space
+    for pos in POSITIONS:
+        if len(board[pos]) == 3:
+            return player
+
+    # Win condition 2 & 3: Three in a row
+    for line in WIN_LINES:
+        # Same size in a row
+        for size in ["SMALL", "MEDIUM", "LARGE"]:
+            if all(size in board[pos] for pos in line):
+                return player
+
+        # Ascending order
+        if ("SMALL" in board[line[0]] and
+            "MEDIUM" in board[line[1]] and
+            "LARGE" in board[line[2]]):
+            return player
+
+        # Descending order
+        if ("LARGE" in board[line[0]] and
+            "MEDIUM" in board[line[1]] and
+            "SMALL" in board[line[2]]):
+            return player
+
+    return None
+
+
+def simulate_cpn_game(cpn, seed=None):
+    """Simulate a game using the CPN model."""
+    import random
+    if seed is not None:
+        random.seed(seed)
+
+    marking = create_initial_marking(cpn)
+    context = EvaluationContext()
+    current_player = "BLUE"
+    move_num = 0
+
+    print("Starting CPN-based Otrio simulation...")
+    print_cpn_state(marking, current_player)
+
+    while True:
+        enabled = get_enabled_transitions(cpn, marking, context, current_player)
+
+        if not enabled:
+            print("\nNo more moves available - Draw!")
+            break
+
+        # Pick a random enabled transition
+        transition, binding, pos = random.choice(enabled)
+
+        print(f"\nMove {move_num + 1}: {current_player} places {binding['x']} at {pos}")
+
+        # Fire the transition
+        cpn.fire_transition(transition, marking, context, binding)
+        move_num += 1
+
+        # Check for winner
+        winner = check_cpn_winner(marking, current_player)
+        if winner:
+            print(f"\n{'='*40}")
+            print(f"WINNER: {winner}")
+            print_cpn_state(marking, current_player)
+            return winner
+
+        # Switch player
+        current_player = "RED" if current_player == "BLUE" else "BLUE"
+
+    print_cpn_state(marking, current_player)
+    return None
+
+
+def print_cpn_state(marking, current_player):
+    """Print the current state of the CPN."""
+    print(f"\nCurrent player: {current_player}")
+
+    for player, prefix in [("BLUE", "Blue"), ("RED", "Red")]:
+        print(f"\n{player} board:")
+        for row in ROWS:
+            row_str = f"  {row}: "
+            for col in COLS:
+                pos = f"{row}{col}"
+                place_name = f"{prefix}_{pos}"
+                tokens = [t.value for t in marking.get_multiset(place_name).tokens]
+                size_str = "".join(s[0] for s in sorted(tokens))
+                row_str += f"[{size_str:3s}] "
+            print(row_str)
+
+        initial_tokens = [t.value for t in marking.get_multiset(f"{prefix}_Initial").tokens]
+        remaining = {"SMALL": 0, "MEDIUM": 0, "LARGE": 0}
+        for t in initial_tokens:
+            remaining[t] += 1
+        print(f"  Remaining: {remaining}")
+
+
+# =============================================================================
+# State Space Exploration
+# =============================================================================
+
+def explore_state_space(max_states=100000, max_depth=18, verbose=True):
+    """
+    Explore all reachable states of the Otrio game.
+
+    Returns statistics about the state space.
+    """
+    initial_state = OtrioGameState()
+
+    visited = set()
+    to_visit = [(initial_state, 0)]  # (state, depth)
+
+    stats = {
+        "total_states": 0,
+        "winning_states": {"BLUE": 0, "RED": 0},
+        "terminal_states": 0,
+        "max_depth_reached": 0,
+        "states_by_depth": defaultdict(int),
+        "wins_by_depth": defaultdict(lambda: {"BLUE": 0, "RED": 0}),
+    }
+
+    while to_visit and stats["total_states"] < max_states:
+        state, depth = to_visit.pop()
+
+        state_hash = state.to_tuple()
+        if state_hash in visited:
+            continue
+
+        visited.add(state_hash)
+        stats["total_states"] += 1
+        stats["states_by_depth"][depth] += 1
+        stats["max_depth_reached"] = max(stats["max_depth_reached"], depth)
+
+        if verbose and stats["total_states"] % 10000 == 0:
+            print(f"Explored {stats['total_states']} states...")
+
+        # Check for terminal state
+        if state.winner:
+            stats["winning_states"][state.winner] += 1
+            stats["wins_by_depth"][depth][state.winner] += 1
+            stats["terminal_states"] += 1
+            continue
+
+        # Get valid moves and explore
+        moves = state.get_valid_moves()
+        if not moves:
+            stats["terminal_states"] += 1
+            continue
+
+        if depth < max_depth:
+            for pos, size in moves:
+                new_state = state.make_move(pos, size)
+                new_hash = new_state.to_tuple()
+                if new_hash not in visited:
+                    to_visit.append((new_state, depth + 1))
+
+    return stats, visited
+
+
+def print_stats(stats):
+    """Print exploration statistics."""
+    print("\n" + "=" * 60)
+    print("OTRIO STATE SPACE EXPLORATION RESULTS")
+    print("=" * 60)
+    print(f"\nTotal states explored: {stats['total_states']:,}")
+    print(f"Terminal states: {stats['terminal_states']:,}")
+    print(f"Max depth reached: {stats['max_depth_reached']}")
+    print(f"\nWinning states:")
+    print(f"  BLUE wins: {stats['winning_states']['BLUE']:,}")
+    print(f"  RED wins: {stats['winning_states']['RED']:,}")
+
+    print(f"\nStates by depth:")
+    for depth in sorted(stats['states_by_depth'].keys()):
+        count = stats['states_by_depth'][depth]
+        blue_wins = stats['wins_by_depth'][depth]['BLUE']
+        red_wins = stats['wins_by_depth'][depth]['RED']
+        print(f"  Depth {depth:2d}: {count:8,} states "
+              f"(BLUE wins: {blue_wins:,}, RED wins: {red_wins:,})")
+
+
+# =============================================================================
+# Sample Game Simulation (using OtrioGameState)
+# =============================================================================
+
+def simulate_random_game(seed=None):
+    """Simulate a random game and show the progression."""
+    import random
+    if seed is not None:
+        random.seed(seed)
+
+    state = OtrioGameState()
+    print("Starting Otrio game simulation...")
+    print(state)
+
+    move_num = 0
+    while not state.winner:
+        moves = state.get_valid_moves()
+        if not moves:
+            print("\nNo more moves available - Draw!")
+            break
+
+        pos, size = random.choice(moves)
+        print(f"\nMove {move_num + 1}: {state.current_player} places {size} at {pos}")
+        state = state.make_move(pos, size)
+        move_num += 1
+
+    print("\n" + "=" * 40)
+    print("FINAL STATE:")
+    print(state)
+
+    return state
+
+
+# =============================================================================
+# Main
+# =============================================================================
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("OTRIO - Colored Petri Net Simulation")
+    print("=" * 60)
+
+    # Build the CPN model
+    print("\n1. Building CPN model...")
+    cpn, places, transitions = build_otrio_cpn()
+    print(f"   Places: {len(cpn.places)}")
+    print(f"   Transitions: {len(cpn.transitions)}")
+    print(f"   Arcs: {len(cpn.arcs)}")
+
+    # Create initial marking
+    print("\n2. Creating initial marking...")
+    marking = create_initial_marking(cpn)
+    blue_tokens = [t.value for t in marking.get_multiset("Blue_Initial").tokens]
+    red_tokens = [t.value for t in marking.get_multiset("Red_Initial").tokens]
+    print(f"   Blue initial tokens: {blue_tokens}")
+    print(f"   Red initial tokens: {red_tokens}")
+
+    # Simulate a game using CPN
+    print("\n3. Simulating a game using CPN model...")
+    print("-" * 40)
+    simulate_cpn_game(cpn, seed=42)
+
+    # Explore state space (limited for demonstration)
+    print("\n\n4. Exploring state space (limited to 50,000 states)...")
+    print("-" * 40)
+    stats, visited = explore_state_space(max_states=50000, verbose=True)
+    print_stats(stats)
+
+    print("\n" + "=" * 60)
+    print("Simulation complete!")
