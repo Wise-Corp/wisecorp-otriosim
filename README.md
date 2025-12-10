@@ -83,43 +83,65 @@ pip install cpnpy
 
 ## Usage
 
-### Run the Simulation
+### 1. Run the Simulation
 
 ```bash
-python otrio_cpn.py
+python otrio_cpn.py                      # Default: simulate + explore 50k states
+python otrio_cpn.py -n 200000            # Explore 200,000 states
+python otrio_cpn.py -n 1000000 -q        # 1M states, quiet mode
+python otrio_cpn.py --no-simulate        # Skip random game, only explore states
+python otrio_cpn.py -n 0                 # Only simulate, no state exploration
 ```
 
-This will:
-1. Build the CPN model
-2. Simulate a random game using the CPN
-3. Explore the state space (limited to 50,000 states by default)
+### 2. Interactive Game Consultant
 
-### Example Output
+Use the consultant to get real-time move advice during an actual game:
 
-```
-============================================================
-OTRIO - Colored Petri Net Simulation
-============================================================
-
-1. Building CPN model...
-   Places: 20
-   Transitions: 18
-   Arcs: 36
-
-2. Creating initial marking...
-   Blue initial tokens: ['SMALL', 'SMALL', 'SMALL', 'MEDIUM', 'MEDIUM', 'MEDIUM', 'LARGE', 'LARGE', 'LARGE']
-   Red initial tokens: ['SMALL', 'SMALL', 'SMALL', 'MEDIUM', 'MEDIUM', 'MEDIUM', 'LARGE', 'LARGE', 'LARGE']
-
-3. Simulating a game using CPN model...
-----------------------------------------
-Move 1: BLUE places MEDIUM at A2
-Move 2: RED places MEDIUM at A1
-Move 3: BLUE places LARGE at B2
-...
-WINNER: RED
+```bash
+python otrio_consultant.py               # Play as BLUE (default)
+python otrio_consultant.py --player red  # Play as RED
+python otrio_consultant.py -n 50000      # More thorough analysis (50k states)
 ```
 
-### Using as a Library
+**Consultant Commands:**
+
+| Command | Description |
+|---------|-------------|
+| `A1 S` | Analyze placing SMALL at A1 |
+| `B2 LARGE` | Analyze placing LARGE at B2 |
+| `analyze all` | Rank all possible moves by win probability |
+| `confirm` | Confirm your analyzed move |
+| `opponent B1 M` | Record opponent's move |
+| `moves` | Show all valid moves |
+| `board` | Show current board state |
+| `undo` | Undo last move |
+| `help` | Show help |
+| `quit` | Exit |
+
+**Example Session:**
+
+```
+[BLUE's turn] > analyze all
+
+MOVE RANKINGS (best to worst)
+==================================================
+  1. B2 M -> 64.7% win rate
+  2. C2 M -> 56.3% win rate
+  3. C3 M -> 56.3% win rate
+  ...
+
+[BLUE's turn] > B2 M
+Analysis for: MEDIUM at B2
+  >>> Win probability: 64.7% <<<
+
+[BLUE's turn] > confirm
+Move confirmed: MEDIUM at B2
+
+[RED's turn] > opponent A1 S
+Opponent played: SMALL at A1
+```
+
+### 3. Using as a Library
 
 ```python
 from otrio_cpn import (
@@ -186,10 +208,11 @@ C [ ] [ ] [L]
 
 ```
 otriosim/
-├── README.md           # This file
-├── CLAUDE.md           # Project context for Claude Code
-├── otrio_cpn.py        # Main CPN implementation
-├── .gitlab-ci.yml      # CI/CD configuration
+├── README.md              # This file
+├── CLAUDE.md              # Project context for Claude Code
+├── otrio_cpn.py           # Main CPN implementation & state space explorer
+├── otrio_consultant.py    # Interactive game consultant
+├── .gitlab-ci.yml         # CI/CD configuration
 └── docs/
     └── otrio_cpn_diagram.png  # CPN diagram
 ```

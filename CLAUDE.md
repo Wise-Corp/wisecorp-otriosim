@@ -14,6 +14,7 @@ A simulation/exploration project for **Otrio**, a strategic tic-tac-toe variant 
 ## Repository Structure
 - `.gitlab-ci.yml` - GitLab CI/CD pipeline configuration
 - `otrio_cpn.py` - Colored Petri Net implementation of Otrio
+- `otrio_consultant.py` - Interactive game consultant for move advice
 
 ## Tech Stack
 - **Language**: Python 3.10+
@@ -35,6 +36,10 @@ pip install cpnpy
 
 # Run simulation and state space exploration
 python otrio_cpn.py
+python otrio_cpn.py -n 200000    # Explore 200k states
+
+# Interactive game consultant
+python otrio_consultant.py       # Get move advice during a real game
 ```
 
 ## Development Workflow

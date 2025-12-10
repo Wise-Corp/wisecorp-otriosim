@@ -550,7 +550,45 @@ def simulate_random_game(seed=None):
 # Main
 # =============================================================================
 
-if __name__ == "__main__":
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Otrio Game - Colored Petri Net Simulation",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python otrio_cpn.py                    # Run with defaults (50,000 states)
+  python otrio_cpn.py -n 200000          # Explore 200,000 states
+  python otrio_cpn.py --max-states 1000000  # Explore 1 million states
+  python otrio_cpn.py --no-simulate      # Skip random game simulation
+        """
+    )
+    parser.add_argument(
+        "-n", "--max-states",
+        type=int,
+        default=50000,
+        help="Maximum number of states to explore (default: 50000)"
+    )
+    parser.add_argument(
+        "--no-simulate",
+        action="store_true",
+        help="Skip the random game simulation"
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for game simulation (default: 42)"
+    )
+    parser.add_argument(
+        "-q", "--quiet",
+        action="store_true",
+        help="Reduce output verbosity"
+    )
+
+    args = parser.parse_args()
+
     print("=" * 60)
     print("OTRIO - Colored Petri Net Simulation")
     print("=" * 60)
@@ -571,15 +609,23 @@ if __name__ == "__main__":
     print(f"   Red initial tokens: {red_tokens}")
 
     # Simulate a game using CPN
-    print("\n3. Simulating a game using CPN model...")
-    print("-" * 40)
-    simulate_cpn_game(cpn, seed=42)
+    if not args.no_simulate:
+        print("\n3. Simulating a game using CPN model...")
+        print("-" * 40)
+        simulate_cpn_game(cpn, seed=args.seed)
 
-    # Explore state space (limited for demonstration)
-    print("\n\n4. Exploring state space (limited to 50,000 states)...")
+    # Explore state space
+    print(f"\n\n4. Exploring state space (max {args.max_states:,} states)...")
     print("-" * 40)
-    stats, visited = explore_state_space(max_states=50000, verbose=True)
+    stats, visited = explore_state_space(
+        max_states=args.max_states,
+        verbose=not args.quiet
+    )
     print_stats(stats)
 
     print("\n" + "=" * 60)
     print("Simulation complete!")
+
+
+if __name__ == "__main__":
+    main()
