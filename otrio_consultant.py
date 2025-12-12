@@ -314,17 +314,56 @@ def print_valid_moves(state):
         print("No valid moves available!")
         return
 
-    print(f"\nValid moves for {state.current_player}:")
+    player = state.current_player
+    opponent = "RED" if player == "BLUE" else "BLUE"
+
+    print(f"\nValid moves for {player}:")
 
     # Group by position
     by_position = defaultdict(list)
     for pos, size in moves:
         by_position[pos].append(size)
 
+    # Track blocked positions
+    fully_blocked = []
+
     for pos in POSITIONS:
         if pos in by_position:
             sizes = ", ".join(s[0] for s in by_position[pos])
-            print(f"  {pos}: [{sizes}]")
+            # Check what's blocked (by self or opponent)
+            own_blocked = [s for s in ["SMALL", "MEDIUM", "LARGE"]
+                         if s in state.board[player][pos]]
+            opp_blocked = [s for s in ["SMALL", "MEDIUM", "LARGE"]
+                         if s in state.board[opponent][pos]]
+
+            notes = []
+            if own_blocked:
+                notes.append(f"own:{','.join(s[0] for s in own_blocked)}")
+            if opp_blocked:
+                notes.append(f"opp:{','.join(s[0] for s in opp_blocked)}")
+
+            if notes:
+                print(f"  {pos}: [{sizes}] ({'; '.join(notes)})")
+            else:
+                print(f"  {pos}: [{sizes}]")
+        else:
+            # Position has no valid moves - track why
+            own_blocked = [s for s in ["SMALL", "MEDIUM", "LARGE"]
+                         if s in state.board[player][pos]]
+            opp_blocked = [s for s in ["SMALL", "MEDIUM", "LARGE"]
+                         if s in state.board[opponent][pos]]
+            if own_blocked or opp_blocked:
+                fully_blocked.append((pos, own_blocked, opp_blocked))
+
+    if fully_blocked:
+        print(f"\n  Fully blocked positions:")
+        for pos, own, opp in fully_blocked[:3]:  # Show max 3
+            parts = []
+            if own:
+                parts.append(f"your {','.join(s[0] for s in own)}")
+            if opp:
+                parts.append(f"opponent's {','.join(s[0] for s in opp)}")
+            print(f"    {pos}: {' + '.join(parts)}")
 
 
 def print_help(strategy_mode=False):
