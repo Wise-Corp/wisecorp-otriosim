@@ -103,12 +103,14 @@ class OtrioGameState:
 
         moves = []
         player = self.current_player
+        opponent = "RED" if player == "BLUE" else "BLUE"
 
         for size in ["SMALL", "MEDIUM", "LARGE"]:
             if self.initial[player][size] > 0:
                 for pos in POSITIONS:
-                    # Can only place if that size isn't already there
-                    if size not in self.board[player][pos]:
+                    # Can only place if that size isn't already there for EITHER player
+                    # (opponent's piece blocks that size at that position)
+                    if size not in self.board[player][pos] and size not in self.board[opponent][pos]:
                         moves.append((pos, size))
 
         return moves
@@ -122,12 +124,17 @@ class OtrioGameState:
             raise ValueError("Game already won")
 
         player = self.current_player
+        opponent = "RED" if player == "BLUE" else "BLUE"
 
         if self.initial[player][size] <= 0:
             raise ValueError(f"No {size} pieces left for {player}")
 
         if size in self.board[player][position]:
             raise ValueError(f"{size} already at {position} for {player}")
+
+        # Check if opponent already has that size there (blocking rule)
+        if size in self.board[opponent][position]:
+            raise ValueError(f"{size} at {position} is blocked by {opponent}")
 
         # Create new state
         new_state = self.copy()
@@ -517,17 +524,25 @@ def print_stats(stats):
 # Winning Strategy Search (Minimax)
 # =============================================================================
 
-def find_winning_strategy(player="BLUE", max_depth=18, verbose=True):
+def find_winning_strategy(player="BLUE", max_depth=18, verbose=True, max_nodes=500000):
     """
     Find a guaranteed winning strategy for the specified player.
 
     Uses minimax with alpha-beta pruning to find moves that guarantee
     a win regardless of opponent's responses.
 
+    Args:
+        player: "BLUE" or "RED"
+        max_depth: Maximum search depth
+        verbose: Print progress
+        max_nodes: Maximum nodes to explore (memory limit)
+
     Returns:
-        - winning_move: The best first move (position, size) or None
-        - strategy_tree: Dict with the full winning strategy
+        - result: 1 = player wins, -1 = opponent wins, 0 = unknown/draw
+        - best_move: The best first move (position, size) or None
+        - win_depth: Depth to win
         - stats: Search statistics
+        - cache: Memoization cache for strategy lookup
     """
     initial_state = OtrioGameState()
     opponent = "RED" if player == "BLUE" else "BLUE"
@@ -535,18 +550,23 @@ def find_winning_strategy(player="BLUE", max_depth=18, verbose=True):
     # Memoization cache: state -> (result, best_move, depth_to_win)
     # result: 1 = player wins, -1 = opponent wins, 0 = draw/unknown
     cache = {}
-    stats = {"nodes_explored": 0, "cache_hits": 0, "max_depth_seen": 0}
+    stats = {"nodes_explored": 0, "cache_hits": 0, "max_depth_seen": 0, "cutoff": False}
 
     def minimax(state, depth, alpha, beta, maximizing):
         """
         Minimax with alpha-beta pruning.
         Returns: (result, best_move, depth_to_win)
         """
+        # Check node limit
+        if stats["nodes_explored"] >= max_nodes:
+            stats["cutoff"] = True
+            return (0, None, depth)
+
         stats["nodes_explored"] += 1
         stats["max_depth_seen"] = max(stats["max_depth_seen"], depth)
 
         if verbose and stats["nodes_explored"] % 100000 == 0:
-            print(f"  Explored {stats['nodes_explored']:,} nodes...")
+            print(f"  Explored {stats['nodes_explored']:,} nodes (cache size: {len(cache):,})...")
 
         # Check cache
         state_key = (state.to_tuple(), maximizing)
@@ -686,11 +706,15 @@ def build_strategy_tree(player, cache, max_moves=10, verbose=True):
     return get_strategy(initial_state, 0, [])
 
 
-def print_winning_strategy(result, best_move, win_depth, player="BLUE", cache=None):
+def print_winning_strategy(result, best_move, win_depth, player="BLUE", cache=None, stats=None):
     """Print the winning strategy result."""
     print("\n" + "=" * 60)
     print(f"WINNING STRATEGY ANALYSIS FOR {player}")
     print("=" * 60)
+
+    if stats and stats.get("cutoff"):
+        print(f"\n[WARNING: Search was cut off at {stats['nodes_explored']:,} nodes]")
+        print(f"[Results may be incomplete - increase --max-nodes for full search]")
 
     if result == 1:
         print(f"\n*** {player} HAS A GUARANTEED WIN! ***")
@@ -709,7 +733,9 @@ def print_winning_strategy(result, best_move, win_depth, player="BLUE", cache=No
         print(f"\n{opponent} has a guaranteed win with perfect play.")
         print(f"{player} cannot force a win.")
     else:
-        print(f"\nNo guaranteed win found within search depth.")
+        print(f"\nNo guaranteed win found within search limits.")
+        if best_move:
+            print(f"Best move found so far: {best_move[1]} at {best_move[0]}")
         print(f"Game may be a draw with perfect play, or deeper search needed.")
 
 
@@ -914,6 +940,12 @@ Examples:
         default=18,
         help="Maximum search depth for --solve (default: 18)"
     )
+    parser.add_argument(
+        "--max-nodes",
+        type=int,
+        default=500000,
+        help="Maximum nodes to explore for --solve (default: 500000)"
+    )
 
     args = parser.parse_args()
 
@@ -927,12 +959,13 @@ Examples:
         print(f"\nSearching for winning strategy for {player}...")
         print("-" * 40)
 
-        result, best_move, win_depth, stats, cache = find_winning_strategy(
+        result, best_move, win_depth, search_stats, cache = find_winning_strategy(
             player=player,
             max_depth=args.max_depth,
-            verbose=not args.quiet
+            verbose=not args.quiet,
+            max_nodes=args.max_nodes
         )
-        print_winning_strategy(result, best_move, win_depth, player, cache)
+        print_winning_strategy(result, best_move, win_depth, player, cache, search_stats)
 
         print("\n" + "=" * 60)
         print("Search complete!")
