@@ -17,6 +17,7 @@ from otrio_cpn import (
     ROWS,
     COLS,
     WIN_LINES,
+    find_winning_strategy,
 )
 
 
@@ -150,6 +151,105 @@ def calculate_win_rate(stats, player):
 
 
 # =============================================================================
+# Strategy Functions
+# =============================================================================
+
+def get_strategy_move(state, strategy_cache, strategy_player):
+    """
+    Get the optimal move from the precomputed strategy cache.
+    Returns (pos, size, result, win_depth) or None if not in cache.
+    """
+    is_maximizing = (state.current_player == strategy_player)
+    state_key = (state.to_tuple(), is_maximizing)
+
+    if state_key in strategy_cache:
+        result, best_move, win_depth = strategy_cache[state_key]
+        if best_move:
+            return best_move[0], best_move[1], result, win_depth
+    return None
+
+
+def print_strategy_hint(state, strategy_cache, strategy_player, your_player):
+    """Print strategy recommendation based on precomputed minimax."""
+    current = state.current_player
+    is_maximizing = (current == strategy_player)
+    state_key = (state.to_tuple(), is_maximizing)
+
+    if state_key not in strategy_cache:
+        print("  [Strategy: position not in cache]")
+        return
+
+    result, best_move, win_depth = strategy_cache[state_key]
+
+    if best_move is None:
+        return
+
+    pos, size = best_move
+
+    print("\n" + "=" * 50)
+    print("STRATEGY RECOMMENDATION")
+    print("=" * 50)
+
+    if current == your_player:
+        # It's your turn - show recommendation
+        if result == 1:
+            moves_to_win = win_depth - len(state.move_history)
+            print(f"  Optimal move: {size[0]} at {pos}")
+            print(f"  Result: GUARANTEED WIN in {moves_to_win} moves!")
+
+            # Show the winning path
+            print(f"\n  Winning path from here:")
+            show_strategy_path(state, strategy_cache, strategy_player, max_moves=6)
+        elif result == -1:
+            print(f"  Best defensive move: {size[0]} at {pos}")
+            print(f"  Result: Opponent has forced win (try to extend game)")
+        else:
+            print(f"  Suggested move: {size[0]} at {pos}")
+            print(f"  Result: Draw with perfect play")
+    else:
+        # Opponent's turn - show what we expect
+        if result == 1:
+            print(f"  Opponent's best: {size[0]} at {pos}")
+            print(f"  But YOU still have a winning strategy!")
+        elif result == -1:
+            print(f"  Warning: Opponent can force a win")
+            print(f"  Their optimal: {size[0]} at {pos}")
+        else:
+            print(f"  Opponent's likely move: {size[0]} at {pos}")
+
+
+def show_strategy_path(state, cache, strategy_player, max_moves=6):
+    """Show the expected winning path from current state."""
+    current_state = state
+    moves_shown = 0
+    move_num = len(state.move_history) + 1
+
+    while not current_state.winner and moves_shown < max_moves:
+        current = current_state.current_player
+        is_maximizing = (current == strategy_player)
+        state_key = (current_state.to_tuple(), is_maximizing)
+
+        if state_key not in cache:
+            break
+
+        result, best_move, _ = cache[state_key]
+        if best_move is None:
+            break
+
+        pos, size = best_move
+        marker = ">>>" if current == strategy_player else "   "
+        print(f"    {marker} {move_num}. {current}: {size[0]} at {pos}")
+
+        current_state = current_state.make_move(pos, size)
+        move_num += 1
+        moves_shown += 1
+
+        if current_state.winner:
+            print(f"    === {current_state.winner} WINS! ===")
+            break
+
+
+# =============================================================================
 # Display Functions
 # =============================================================================
 
@@ -227,7 +327,7 @@ def print_valid_moves(state):
             print(f"  {pos}: [{sizes}]")
 
 
-def print_help():
+def print_help(strategy_mode=False):
     """Print help information."""
     print("""
 Commands:
@@ -239,8 +339,16 @@ Commands:
   analyze all        - Analyze all valid moves
   undo               - Undo last move
   help               - Show this help
-  quit               - Exit the consultant
+  quit               - Exit the consultant""")
 
+    if strategy_mode:
+        print("""
+Strategy mode commands:
+  strategy           - Show optimal move from precomputed strategy
+  path               - Show winning path from current position
+  auto               - Auto-play optimal move (your turn only)""")
+
+    print("""
 Position format: A1, A2, A3, B1, B2, B3, C1, C2, C3
 Size format: S/SMALL, M/MEDIUM, L/LARGE
 """)
@@ -277,7 +385,14 @@ def parse_move(move_str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Otrio Game Consultant - Interactive Move Advisor"
+        description="Otrio Game Consultant - Interactive Move Advisor",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python otrio_consultant.py                # Standard mode with move analysis
+  python otrio_consultant.py --strategy     # Precompute winning strategy
+  python otrio_consultant.py --player red   # Play as RED
+        """
     )
     parser.add_argument(
         "-n", "--max-states",
@@ -291,6 +406,11 @@ def main():
         default="blue",
         help="Which player you are (default: blue)"
     )
+    parser.add_argument(
+        "--strategy",
+        action="store_true",
+        help="Precompute winning strategy using minimax (shows optimal moves)"
+    )
 
     args = parser.parse_args()
 
@@ -298,7 +418,31 @@ def main():
     print("OTRIO GAME CONSULTANT")
     print("=" * 60)
     print(f"\nYou are playing as: {args.player.upper()}")
-    print(f"Analysis depth: {args.max_states:,} states per move")
+
+    # Strategy mode: precompute the winning strategy
+    strategy_cache = None
+    strategy_player = "BLUE"  # Strategy is computed for first player
+
+    if args.strategy:
+        print("\nPrecomputing winning strategy (this may take a moment)...")
+        result, best_move, win_depth, stats, strategy_cache = find_winning_strategy(
+            player=strategy_player,
+            max_depth=18,
+            verbose=True
+        )
+        if result == 1:
+            print(f"\n*** BLUE has a guaranteed win in {win_depth} moves! ***")
+            print(f"Opening move: {best_move[1]} at {best_move[0]}")
+        elif result == -1:
+            print(f"\n*** RED has a guaranteed win with perfect play ***")
+        else:
+            print(f"\nGame is likely a draw with perfect play.")
+
+        print("\nStrategy mode ENABLED - type 'strategy' for recommendations")
+    else:
+        print(f"Analysis depth: {args.max_states:,} states per move")
+        print("\nTip: Run with --strategy for precomputed optimal moves")
+
     print("\nType 'help' for commands, 'quit' to exit")
 
     state = OtrioGameState()
@@ -308,6 +452,10 @@ def main():
     move_history = []
 
     print_board(state)
+
+    # Show initial strategy hint if in strategy mode
+    if strategy_cache and your_player == "BLUE":
+        print_strategy_hint(state, strategy_cache, strategy_player, your_player)
 
     while True:
         if state.winner:
@@ -330,7 +478,7 @@ def main():
             break
 
         elif user_input == "help":
-            print_help()
+            print_help(strategy_mode=strategy_cache is not None)
 
         elif user_input == "board":
             print_board(state)
@@ -343,8 +491,50 @@ def main():
                 state = move_history.pop()
                 print("Move undone.")
                 print_board(state)
+                if strategy_cache:
+                    print_strategy_hint(state, strategy_cache, strategy_player, your_player)
             else:
                 print("No moves to undo.")
+
+        # Strategy mode commands
+        elif user_input == "strategy":
+            if not strategy_cache:
+                print("Strategy mode not enabled. Restart with --strategy flag.")
+            else:
+                print_strategy_hint(state, strategy_cache, strategy_player, your_player)
+
+        elif user_input == "path":
+            if not strategy_cache:
+                print("Strategy mode not enabled. Restart with --strategy flag.")
+            else:
+                print("\nWinning path from current position:")
+                show_strategy_path(state, strategy_cache, strategy_player, max_moves=10)
+
+        elif user_input == "auto":
+            if not strategy_cache:
+                print("Strategy mode not enabled. Restart with --strategy flag.")
+            elif state.current_player != your_player:
+                print("It's not your turn. Record opponent's move first.")
+            else:
+                move_info = get_strategy_move(state, strategy_cache, strategy_player)
+                if move_info:
+                    pos, size, result, win_depth = move_info
+                    move_history.append(state)
+                    state = state.make_move(pos, size)
+                    print(f"\nAuto-played optimal move: {size} at {pos}")
+                    print_board(state)
+
+                    if state.winner:
+                        continue
+
+                    print(f"\nNow waiting for opponent's move...")
+                    print("Use: opponent <position> <size>")
+
+                    # Show what we expect from opponent
+                    if strategy_cache:
+                        print_strategy_hint(state, strategy_cache, strategy_player, your_player)
+                else:
+                    print("No optimal move found in strategy cache.")
 
         elif user_input == "analyze all":
             moves = state.get_valid_moves()
@@ -394,6 +584,10 @@ def main():
                 print(f"\nNow waiting for opponent's move...")
                 print("Use: opponent <position> <size>")
 
+                # Show strategy hint for opponent's turn
+                if strategy_cache:
+                    print_strategy_hint(state, strategy_cache, strategy_player, your_player)
+
         elif user_input.startswith("opponent "):
             if state.current_player == your_player:
                 print("It's your turn, not the opponent's.")
@@ -417,6 +611,10 @@ def main():
                     continue
 
                 print("\nYour turn! Analyze a move or type 'moves' to see options.")
+
+                # Show strategy recommendation for your turn
+                if strategy_cache:
+                    print_strategy_hint(state, strategy_cache, strategy_player, your_player)
             except ValueError as e:
                 move_history.pop()
                 print(f"Invalid move: {e}")
