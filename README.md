@@ -73,9 +73,12 @@ The game is modeled as a Colored Petri Net with the following structure:
 ## Installation
 
 ```bash
-# Clone the repository
-git clone https://gitlab.com/wise-corp/techteam/devops/otriosim.git
-cd otriosim
+# Clone the repository (GitHub - public)
+git clone https://github.com/Wise-Corp/wisecorp-otriosim.git
+cd wisecorp-otriosim
+
+# Or from GitLab (internal)
+# git clone https://gitlab.com/wise-corp/techteam/devops/otriosim.git
 
 # Install dependencies
 pip install cpnpy streamlit

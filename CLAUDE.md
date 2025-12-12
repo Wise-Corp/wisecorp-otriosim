@@ -49,7 +49,8 @@ streamlit run otrio_web.py       # Visual board with move analysis
 
 ## Development Workflow
 - Main branch: `master`
-- Remote: `https://gitlab.com/wise-corp/techteam/devops/otriosim.git`
+- GitHub (public): `https://github.com/Wise-Corp/wisecorp-otriosim.git`
+- GitLab (internal): `https://gitlab.com/wise-corp/techteam/devops/otriosim.git`
 
 ## Game Rules Reference
 - 2-4 players
