@@ -514,6 +514,198 @@ def print_stats(stats):
 
 
 # =============================================================================
+# Winning Strategy Search (Minimax)
+# =============================================================================
+
+def find_winning_strategy(player="BLUE", max_depth=18, verbose=True):
+    """
+    Find a guaranteed winning strategy for the specified player.
+
+    Uses minimax with alpha-beta pruning to find moves that guarantee
+    a win regardless of opponent's responses.
+
+    Returns:
+        - winning_move: The best first move (position, size) or None
+        - strategy_tree: Dict with the full winning strategy
+        - stats: Search statistics
+    """
+    initial_state = OtrioGameState()
+    opponent = "RED" if player == "BLUE" else "BLUE"
+
+    # Memoization cache: state -> (result, best_move, depth_to_win)
+    # result: 1 = player wins, -1 = opponent wins, 0 = draw/unknown
+    cache = {}
+    stats = {"nodes_explored": 0, "cache_hits": 0, "max_depth_seen": 0}
+
+    def minimax(state, depth, alpha, beta, maximizing):
+        """
+        Minimax with alpha-beta pruning.
+        Returns: (result, best_move, depth_to_win)
+        """
+        stats["nodes_explored"] += 1
+        stats["max_depth_seen"] = max(stats["max_depth_seen"], depth)
+
+        if verbose and stats["nodes_explored"] % 100000 == 0:
+            print(f"  Explored {stats['nodes_explored']:,} nodes...")
+
+        # Check cache
+        state_key = (state.to_tuple(), maximizing)
+        if state_key in cache:
+            stats["cache_hits"] += 1
+            return cache[state_key]
+
+        # Terminal states
+        if state.winner == player:
+            result = (1, None, depth)  # Player wins
+            cache[state_key] = result
+            return result
+        if state.winner == opponent:
+            result = (-1, None, depth)  # Opponent wins
+            cache[state_key] = result
+            return result
+
+        moves = state.get_valid_moves()
+        if not moves or depth >= max_depth:
+            result = (0, None, depth)  # Draw or max depth
+            cache[state_key] = result
+            return result
+
+        best_move = None
+        best_depth = max_depth + 1
+
+        if maximizing:  # Player's turn - maximize
+            max_eval = -2
+            for pos, size in moves:
+                new_state = state.make_move(pos, size)
+                eval_result, _, win_depth = minimax(new_state, depth + 1, alpha, beta, False)
+
+                # Prefer faster wins
+                if eval_result > max_eval or (eval_result == max_eval and win_depth < best_depth):
+                    max_eval = eval_result
+                    best_move = (pos, size)
+                    best_depth = win_depth
+
+                alpha = max(alpha, eval_result)
+                if beta <= alpha:
+                    break  # Pruning
+
+            result = (max_eval, best_move, best_depth)
+            cache[state_key] = result
+            return result
+
+        else:  # Opponent's turn - minimize
+            min_eval = 2
+            for pos, size in moves:
+                new_state = state.make_move(pos, size)
+                eval_result, _, win_depth = minimax(new_state, depth + 1, alpha, beta, True)
+
+                if eval_result < min_eval or (eval_result == min_eval and win_depth > best_depth):
+                    min_eval = eval_result
+                    best_move = (pos, size)
+                    best_depth = win_depth
+
+                beta = min(beta, eval_result)
+                if beta <= alpha:
+                    break  # Pruning
+
+            result = (min_eval, best_move, best_depth)
+            cache[state_key] = result
+            return result
+
+    if verbose:
+        print(f"Searching for winning strategy for {player}...")
+        print(f"Max depth: {max_depth}")
+
+    # Start search (BLUE moves first, so maximizing if player is BLUE)
+    maximizing = (player == "BLUE")
+    result, best_move, win_depth = minimax(initial_state, 0, -2, 2, maximizing)
+
+    if verbose:
+        print(f"\nSearch complete!")
+        print(f"  Nodes explored: {stats['nodes_explored']:,}")
+        print(f"  Cache hits: {stats['cache_hits']:,}")
+        print(f"  Max depth seen: {stats['max_depth_seen']}")
+
+    return result, best_move, win_depth, stats, cache
+
+
+def build_strategy_tree(player, cache, max_moves=10, verbose=True):
+    """
+    Build a strategy tree from the minimax cache.
+    Shows the optimal moves for the player at each decision point.
+    """
+    initial_state = OtrioGameState()
+    opponent = "RED" if player == "BLUE" else "BLUE"
+
+    def get_strategy(state, depth, path):
+        if depth > max_moves:
+            return None
+
+        if state.winner:
+            return {"winner": state.winner, "path": path}
+
+        moves = state.get_valid_moves()
+        if not moves:
+            return {"winner": "DRAW", "path": path}
+
+        is_player_turn = (state.current_player == player)
+        state_key = (state.to_tuple(), is_player_turn)
+
+        if state_key in cache:
+            result, best_move, win_depth = cache[state_key]
+
+            if best_move and is_player_turn:
+                pos, size = best_move
+                new_state = state.make_move(pos, size)
+                new_path = path + [(state.current_player, pos, size)]
+
+                # Get opponent's responses
+                if new_state.winner:
+                    return {
+                        "move": best_move,
+                        "result": "WIN" if new_state.winner == player else "LOSE",
+                        "path": new_path
+                    }
+
+                # Show what happens for each opponent response
+                responses = {}
+                for opp_pos, opp_size in new_state.get_valid_moves()[:5]:  # Limit responses shown
+                    opp_state = new_state.make_move(opp_pos, opp_size)
+                    sub_strategy = get_strategy(opp_state, depth + 2,
+                                               new_path + [(opponent, opp_pos, opp_size)])
+                    responses[(opp_pos, opp_size)] = sub_strategy
+
+                return {
+                    "move": best_move,
+                    "win_in": win_depth - depth,
+                    "responses": responses
+                }
+
+        return None
+
+    return get_strategy(initial_state, 0, [])
+
+
+def print_winning_strategy(result, best_move, win_depth, player="BLUE"):
+    """Print the winning strategy result."""
+    print("\n" + "=" * 60)
+    print(f"WINNING STRATEGY ANALYSIS FOR {player}")
+    print("=" * 60)
+
+    if result == 1:
+        print(f"\n*** {player} HAS A GUARANTEED WIN! ***")
+        print(f"Best first move: {best_move[1]} at {best_move[0]}")
+        print(f"Wins in at most {win_depth} moves")
+    elif result == -1:
+        opponent = "RED" if player == "BLUE" else "BLUE"
+        print(f"\n{opponent} has a guaranteed win with perfect play.")
+        print(f"{player} cannot force a win.")
+    else:
+        print(f"\nNo guaranteed win found within search depth.")
+        print(f"Game may be a draw with perfect play, or deeper search needed.")
+
+
+# =============================================================================
 # Sample Game Simulation (using OtrioGameState)
 # =============================================================================
 
@@ -562,6 +754,8 @@ Examples:
   python otrio_cpn.py -n 200000          # Explore 200,000 states
   python otrio_cpn.py --max-states 1000000  # Explore 1 million states
   python otrio_cpn.py --no-simulate      # Skip random game simulation
+  python otrio_cpn.py --solve            # Find winning strategy for BLUE
+  python otrio_cpn.py --solve --player red  # Find winning strategy for RED
         """
     )
     parser.add_argument(
@@ -586,12 +780,46 @@ Examples:
         action="store_true",
         help="Reduce output verbosity"
     )
+    parser.add_argument(
+        "--solve",
+        action="store_true",
+        help="Find a guaranteed winning strategy (minimax search)"
+    )
+    parser.add_argument(
+        "--player",
+        choices=["blue", "red"],
+        default="blue",
+        help="Player to find winning strategy for (default: blue)"
+    )
+    parser.add_argument(
+        "--max-depth",
+        type=int,
+        default=18,
+        help="Maximum search depth for --solve (default: 18)"
+    )
 
     args = parser.parse_args()
 
     print("=" * 60)
     print("OTRIO - Colored Petri Net Simulation")
     print("=" * 60)
+
+    # Solve mode: find winning strategy
+    if args.solve:
+        player = args.player.upper()
+        print(f"\nSearching for winning strategy for {player}...")
+        print("-" * 40)
+
+        result, best_move, win_depth, stats, cache = find_winning_strategy(
+            player=player,
+            max_depth=args.max_depth,
+            verbose=not args.quiet
+        )
+        print_winning_strategy(result, best_move, win_depth, player)
+
+        print("\n" + "=" * 60)
+        print("Search complete!")
+        return
 
     # Build the CPN model
     print("\n1. Building CPN model...")
