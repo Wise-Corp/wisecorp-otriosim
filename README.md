@@ -78,7 +78,7 @@ git clone https://gitlab.com/wise-corp/techteam/devops/otriosim.git
 cd otriosim
 
 # Install dependencies
-pip install cpnpy
+pip install cpnpy streamlit
 ```
 
 ## Usage
@@ -93,9 +93,28 @@ python otrio_cpn.py --no-simulate        # Skip random game, only explore states
 python otrio_cpn.py -n 0                 # Only simulate, no state exploration
 ```
 
-### 2. Interactive Game Consultant
+### 2. Web Interface (Recommended)
 
-Use the consultant to get real-time move advice during an actual game:
+Launch the visual web interface with interactive board:
+
+```bash
+streamlit run otrio_web.py
+```
+
+Then open http://localhost:8501 in your browser.
+
+**Features:**
+- Visual SVG board with colored pieces
+- Click to select position and size
+- Real-time move analysis with win probabilities
+- "Analyze All Moves" to rank every possible move
+- Move history and undo support
+
+![Otrio Web Interface](docs/otrio_web_screenshot.png)
+
+### 3. Command-Line Consultant
+
+Use the CLI consultant for move advice during a real game:
 
 ```bash
 python otrio_consultant.py               # Play as BLUE (default)
@@ -141,7 +160,7 @@ Move confirmed: MEDIUM at B2
 Opponent played: SMALL at A1
 ```
 
-### 3. Using as a Library
+### 4. Using as a Library
 
 ```python
 from otrio_cpn import (
@@ -211,7 +230,8 @@ otriosim/
 ├── README.md              # This file
 ├── CLAUDE.md              # Project context for Claude Code
 ├── otrio_cpn.py           # Main CPN implementation & state space explorer
-├── otrio_consultant.py    # Interactive game consultant
+├── otrio_consultant.py    # CLI game consultant
+├── otrio_web.py           # Streamlit web interface
 ├── .gitlab-ci.yml         # CI/CD configuration
 └── docs/
     └── otrio_cpn_diagram.png  # CPN diagram
