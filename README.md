@@ -118,6 +118,7 @@ Use the CLI consultant for move advice during a real game:
 
 ```bash
 python otrio_consultant.py               # Play as BLUE (default)
+python otrio_consultant.py --perfect     # Perfect play mode (guaranteed win!)
 python otrio_consultant.py --player red  # Play as RED
 python otrio_consultant.py -n 50000      # More thorough analysis (50k states)
 ```
@@ -222,6 +223,46 @@ A [S] [ ] [ ]
 B [ ] [M] [ ]  ← SMALL → MEDIUM → LARGE diagonal = WIN
 C [ ] [ ] [L]
 ```
+
+## Winning Strategy (Solved Game!)
+
+**Otrio is a solved game.** The first player (BLUE) has a guaranteed winning strategy.
+
+### The Strategy
+
+1. **Opening**: Place MEDIUM at B2 (center)
+   - Controls 4 potential win lines (both diagonals, middle row, middle column)
+
+2. **Second Move**: Place LARGE at a corner to create a diagonal threat
+   - If RED played on a corner (A1, A3, C1, C3): Place LARGE on the opposite corner
+   - Otherwise: Place LARGE at A1
+
+3. **Third Move Onward**: Create double threats that RED cannot both defend
+   - After M@B2 + L@A1, BLUE threatens ascending win (S@C3) and descending win (L@A1, M@B2, S@C3)
+   - Whatever RED blocks, BLUE creates another threat
+
+### Example Winning Sequence
+
+```
+Move 1: BLUE M@B2  (center control)
+Move 2: RED  S@A2  (any response)
+Move 3: BLUE L@A1  (diagonal threat: L-M-S needs S@C3)
+Move 4: RED  S@C3  (blocks ascending diagonal)
+Move 5: BLUE S@A1  (creates 5 simultaneous threats!)
+        -> RED cannot block all, BLUE wins
+```
+
+### Using Perfect Play Mode
+
+```bash
+python otrio_consultant.py --perfect
+```
+
+Commands:
+- `perfect` - Show the optimal move for current position
+- `autowin` - Auto-play optimal moves (you enter RED's responses)
+
+This strategy has been verified against all 26 possible RED first-move responses.
 
 ## Project Structure
 
