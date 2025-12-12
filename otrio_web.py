@@ -25,10 +25,10 @@ def generate_board_svg(state, selected_pos=None, hover_pos=None):
     margin = 40
     total_size = board_size + 2 * margin
 
-    # Colors
+    # Colors - same color for all sizes per player
     colors = {
-        "BLUE": {"SMALL": "#3498db", "MEDIUM": "#2980b9", "LARGE": "#1a5276"},
-        "RED": {"SMALL": "#e74c3c", "MEDIUM": "#c0392b", "LARGE": "#922b21"},
+        "BLUE": "#2980b9",  # Blue for all sizes
+        "RED": "#c0392b",   # Red for all sizes
     }
     ring_radii = {"SMALL": 15, "MEDIUM": 30, "LARGE": 45}
 
@@ -67,9 +67,14 @@ def generate_board_svg(state, selected_pos=None, hover_pos=None):
             for player in ["BLUE", "RED"]:
                 for size in state.board[player][pos]:
                     radius = ring_radii[size]
-                    color = colors[player][size]
-                    stroke_width = 8 if size == "SMALL" else 6 if size == "MEDIUM" else 5
-                    svg_parts.append(f'<circle cx="{cx}" cy="{cy}" r="{radius}" fill="none" stroke="{color}" stroke-width="{stroke_width}"/>')
+                    color = colors[player]
+                    if size == "SMALL":
+                        # Small tokens are filled disks
+                        svg_parts.append(f'<circle cx="{cx}" cy="{cy}" r="{radius}" fill="{color}" stroke="none"/>')
+                    else:
+                        # Medium and Large are rings
+                        stroke_width = 6 if size == "MEDIUM" else 5
+                        svg_parts.append(f'<circle cx="{cx}" cy="{cy}" r="{radius}" fill="none" stroke="{color}" stroke-width="{stroke_width}"/>')
 
     # Draw row/column labels
     for idx, row in enumerate(ROWS):
