@@ -686,7 +686,7 @@ def build_strategy_tree(player, cache, max_moves=10, verbose=True):
     return get_strategy(initial_state, 0, [])
 
 
-def print_winning_strategy(result, best_move, win_depth, player="BLUE"):
+def print_winning_strategy(result, best_move, win_depth, player="BLUE", cache=None):
     """Print the winning strategy result."""
     print("\n" + "=" * 60)
     print(f"WINNING STRATEGY ANALYSIS FOR {player}")
@@ -696,6 +696,14 @@ def print_winning_strategy(result, best_move, win_depth, player="BLUE"):
         print(f"\n*** {player} HAS A GUARANTEED WIN! ***")
         print(f"Best first move: {best_move[1]} at {best_move[0]}")
         print(f"Wins in at most {win_depth} moves")
+
+        # Show the winning path
+        if cache:
+            print("\n" + "-" * 60)
+            print("WINNING STRATEGY (one example path):")
+            print("-" * 60)
+            show_winning_path(player, cache)
+
     elif result == -1:
         opponent = "RED" if player == "BLUE" else "BLUE"
         print(f"\n{opponent} has a guaranteed win with perfect play.")
@@ -703,6 +711,115 @@ def print_winning_strategy(result, best_move, win_depth, player="BLUE"):
     else:
         print(f"\nNo guaranteed win found within search depth.")
         print(f"Game may be a draw with perfect play, or deeper search needed.")
+
+
+def show_winning_path(player, cache):
+    """
+    Display the winning path from the cache.
+    Shows player's optimal moves and one example of opponent's response.
+    """
+    state = OtrioGameState()
+    opponent = "RED" if player == "BLUE" else "BLUE"
+    move_num = 1
+
+    print(f"\nNote: >>> marks {player}'s optimal moves")
+    print(f"      {opponent}'s moves shown are just ONE example response.\n")
+
+    while not state.winner:
+        current = state.current_player
+        is_maximizing = (current == player)
+        state_key = (state.to_tuple(), is_maximizing)
+
+        if state_key not in cache:
+            print(f"  (strategy not cached for this state)")
+            break
+
+        result, best_move, _ = cache[state_key]
+
+        if best_move is None:
+            break
+
+        pos, size = best_move
+
+        # Display move
+        marker = ">>>" if current == player else "   "
+        print(f"{marker} {move_num}. {current}: {size[0]} at {pos}")
+
+        state = state.make_move(pos, size)
+        move_num += 1
+
+        if state.winner:
+            print(f"\n    === {state.winner} WINS! ===")
+            break
+
+        # Safety limit
+        if move_num > 20:
+            print("  (path truncated)")
+            break
+
+    # Show the full strategy tree for key decision points
+    print("\n" + "-" * 60)
+    print(f"FULL STRATEGY TREE (what {player} plays vs any {opponent} response):")
+    print("-" * 60)
+    show_strategy_tree(player, cache, max_depth=6)
+
+
+def show_strategy_tree(player, cache, max_depth=6):
+    """
+    Display strategy tree showing player's responses to all opponent moves.
+    """
+    opponent = "RED" if player == "BLUE" else "BLUE"
+
+    def get_optimal_move(state):
+        """Get the optimal move for current player from cache."""
+        is_maximizing = (state.current_player == player)
+        state_key = (state.to_tuple(), is_maximizing)
+        if state_key in cache:
+            _, best_move, _ = cache[state_key]
+            return best_move
+        return None
+
+    def format_move(pos, size):
+        return f"{size[0]}@{pos}"
+
+    def print_tree(state, depth, indent, last_move_str=""):
+        if depth > max_depth or state.winner:
+            if state.winner:
+                print(f"{indent}  -> {state.winner} WINS")
+            return
+
+        current = state.current_player
+        optimal = get_optimal_move(state)
+
+        if optimal is None:
+            return
+
+        if current == player:
+            # Player's turn: show the optimal move
+            pos, size = optimal
+            print(f"{indent}{player}: {format_move(pos, size)}")
+            new_state = state.make_move(pos, size)
+            print_tree(new_state, depth + 1, indent, format_move(pos, size))
+        else:
+            # Opponent's turn: show all responses (limited) and player's counter
+            moves = state.get_valid_moves()
+            # Limit number of branches shown
+            shown_moves = moves[:5] if depth < 4 else moves[:2]
+
+            for i, (pos, size) in enumerate(shown_moves):
+                prefix = "|-" if i < len(shown_moves) - 1 else "+-"
+                new_indent = indent + ("| " if i < len(shown_moves) - 1 else "  ")
+
+                new_state = state.make_move(pos, size)
+                print(f"{indent}{prefix} if {opponent} plays {format_move(pos, size)}:")
+                print_tree(new_state, depth + 1, new_indent, format_move(pos, size))
+
+            if len(moves) > len(shown_moves):
+                print(f"{indent}   ... and {len(moves) - len(shown_moves)} more {opponent} options (all lead to {player} win)")
+
+    # Start from initial state
+    initial = OtrioGameState()
+    print_tree(initial, 0, "")
 
 
 # =============================================================================
@@ -815,7 +932,7 @@ Examples:
             max_depth=args.max_depth,
             verbose=not args.quiet
         )
-        print_winning_strategy(result, best_move, win_depth, player)
+        print_winning_strategy(result, best_move, win_depth, player, cache)
 
         print("\n" + "=" * 60)
         print("Search complete!")
