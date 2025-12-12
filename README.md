@@ -73,12 +73,9 @@ The game is modeled as a Colored Petri Net with the following structure:
 ## Installation
 
 ```bash
-# Clone the repository (GitHub - public)
+# Clone the repository
 git clone https://github.com/Wise-Corp/wisecorp-otriosim.git
 cd wisecorp-otriosim
-
-# Or from GitLab (internal)
-# git clone https://gitlab.com/wise-corp/techteam/devops/otriosim.git
 
 # Install dependencies
 pip install cpnpy streamlit
@@ -235,7 +232,7 @@ otriosim/
 ├── otrio_cpn.py           # Main CPN implementation & state space explorer
 ├── otrio_consultant.py    # CLI game consultant
 ├── otrio_web.py           # Streamlit web interface
-├── .gitlab-ci.yml         # CI/CD configuration
+├── .github/               # GitHub Actions (if applicable)
 └── docs/
     └── otrio_cpn_diagram.png  # CPN diagram
 ```
