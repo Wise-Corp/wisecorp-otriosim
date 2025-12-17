@@ -280,7 +280,7 @@ otriosim/
 
 ## License
 
-Internal use - WiseCorp TechTeam
+MIT License - See [LICENSE](LICENSE) for details.
 
 ## References
 
