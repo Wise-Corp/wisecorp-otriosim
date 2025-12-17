@@ -73,8 +73,9 @@ static pthread_mutex_t g_output_mutex = PTHREAD_MUTEX_INITIALIZER;
 static inline void state_init(State *s) {
     s->blue = 0;
     s->red = 0;
-    s->blue_hand = 0x49;  /* 3 of each: 001 001 001 in groups of 3 bits = 0b001001001 */
-    s->red_hand = 0x49;
+    /* 3 of each size: (3 << 0) | (3 << 3) | (3 << 6) = 0xDB */
+    s->blue_hand = 0xDB;
+    s->red_hand = 0xDB;
     s->turn = PLAYER_BLUE;
 }
 
