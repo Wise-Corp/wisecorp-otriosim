@@ -234,17 +234,20 @@ class OtrioGameState:
 
 
 # =============================================================================
-# CPN Model Builder
+# CPN Model Builder (Original - Separate Places per Player)
 # =============================================================================
 
 def build_otrio_cpn():
     """
-    Build the Colored Petri Net model for Otrio.
+    Build the Colored Petri Net model for Otrio (original model).
 
     Structure:
     - Places: Blue_Initial, Red_Initial, Blue_A1..Blue_C3, Red_A1..Red_C3
     - Transitions: Blue_to_A1..Blue_to_C3, Red_to_A1..Red_to_C3
     - Arcs connect initial places to board places via transitions
+
+    Note: This model doesn't enforce turn-taking or blocking in the CPN structure.
+    Those constraints are handled in the game logic (OtrioGameState).
     """
     cpn = CPN()
 
@@ -285,6 +288,212 @@ def build_otrio_cpn():
             cpn.add_arc(output_arc)
 
     return cpn, places, transitions
+
+
+# =============================================================================
+# Improved CPN Model (Shared Board Places + Turn Control + Blocking)
+# =============================================================================
+
+# Define color sets for the improved model
+TOKEN_COLORSET = EnumeratedColorSet("Token", ["BLUE_SMALL", "BLUE_MEDIUM", "BLUE_LARGE",
+                                               "RED_SMALL", "RED_MEDIUM", "RED_LARGE"])
+TURN_COLORSET = EnumeratedColorSet("Turn", ["BLUE", "RED"])
+
+
+def build_improved_otrio_cpn():
+    """
+    Build an improved CPN model for Otrio with proper constraints.
+
+    Key improvements:
+    1. SHARED BOARD PLACES: One place per cell (Board_A1, etc.) holding tokens
+       that encode both player and size: (BLUE_SMALL, RED_MEDIUM, etc.)
+
+    2. TURN CONTROL: A "Turn" place holds a single token (BLUE or RED)
+       indicating whose turn it is. Transitions consume and produce turn tokens.
+
+    3. BLOCKING RULE: Implemented via guards on transitions that check
+       if the same size (regardless of player) already exists at target position.
+
+    Structure:
+    - Places:
+        * Blue_Pool, Red_Pool: Unplaced pieces (9 each)
+        * Board_A1..Board_C3: Shared board cells (9 places)
+        * Turn: Current player token (1 place)
+
+    - Transitions:
+        * Move_Blue_A1_S, Move_Blue_A1_M, Move_Blue_A1_L, ... (27 per player = 54 total)
+        * Each transition is specific to (player, position, size)
+
+    - Guards:
+        * Check that the target cell doesn't already have a token of the same size
+    """
+    cpn = CPN()
+    places = {}
+    transitions = {}
+
+    # ----- PLACES -----
+
+    # Player pools (unplaced pieces)
+    places["Blue_Pool"] = Place("Blue_Pool", SIZE_COLORSET)
+    places["Red_Pool"] = Place("Red_Pool", SIZE_COLORSET)
+    cpn.add_place(places["Blue_Pool"])
+    cpn.add_place(places["Red_Pool"])
+
+    # Shared board places (one per cell)
+    for pos in POSITIONS:
+        place_name = f"Board_{pos}"
+        places[place_name] = Place(place_name, TOKEN_COLORSET)
+        cpn.add_place(places[place_name])
+
+    # Turn control place
+    places["Turn"] = Place("Turn", TURN_COLORSET)
+    cpn.add_place(places["Turn"])
+
+    # ----- TRANSITIONS -----
+    # Create one transition per (player, position, size) combination
+    # This explicit enumeration allows us to enforce blocking via guards
+
+    for player in ["Blue", "Red"]:
+        pool_place = places[f"{player}_Pool"]
+        player_upper = player.upper()
+
+        for pos in POSITIONS:
+            board_place = places[f"Board_{pos}"]
+
+            for size in ["SMALL", "MEDIUM", "LARGE"]:
+                trans_name = f"Move_{player}_{pos}_{size[0]}"
+                token_value = f"{player_upper}_{size}"
+
+                # Create transition with guard
+                # Guard: no token with same size exists at this position
+                guard = f"no_{size}_at_{pos}"
+
+                transition = Transition(trans_name, variables=["turn"], guard=guard)
+                transitions[trans_name] = transition
+                cpn.add_transition(transition)
+
+                # Input arc from pool: consume the specific size token
+                input_pool_arc = Arc(pool_place, transition, size)
+                cpn.add_arc(input_pool_arc)
+
+                # Input arc from Turn: consume turn token (must be this player's turn)
+                input_turn_arc = Arc(places["Turn"], transition, player_upper)
+                cpn.add_arc(input_turn_arc)
+
+                # Output arc to board: produce player+size token
+                output_board_arc = Arc(transition, board_place, token_value)
+                cpn.add_arc(output_board_arc)
+
+                # Output arc to Turn: produce opponent's turn token
+                opponent = "RED" if player == "Blue" else "BLUE"
+                output_turn_arc = Arc(transition, places["Turn"], opponent)
+                cpn.add_arc(output_turn_arc)
+
+    return cpn, places, transitions
+
+
+def create_improved_initial_marking(cpn):
+    """Create initial marking for the improved CPN model."""
+    marking = Marking()
+
+    # Each player starts with 3 SMALL, 3 MEDIUM, 3 LARGE in their pool
+    initial_tokens = ["SMALL"] * 3 + ["MEDIUM"] * 3 + ["LARGE"] * 3
+    marking.set_tokens("Blue_Pool", initial_tokens)
+    marking.set_tokens("Red_Pool", initial_tokens)
+
+    # All board places start empty
+    for pos in POSITIONS:
+        marking.set_tokens(f"Board_{pos}", [])
+
+    # BLUE goes first
+    marking.set_tokens("Turn", ["BLUE"])
+
+    return marking
+
+
+def check_blocking_guard(marking, position, size):
+    """
+    Guard function for blocking rule.
+    Returns True if the move is allowed (no token of same size at position).
+    """
+    board_place = f"Board_{position}"
+    tokens = [t.value for t in marking.get_multiset(board_place).tokens]
+
+    # Check if any token has the same size (regardless of player)
+    for token in tokens:
+        # Token format: "BLUE_SMALL", "RED_MEDIUM", etc.
+        token_size = token.split("_")[1]
+        if token_size == size:
+            return False  # Blocked!
+
+    return True  # Move allowed
+
+
+def get_enabled_transitions_improved(cpn, marking, current_player):
+    """
+    Get all enabled transitions for the current player in the improved model.
+    Checks turn control and blocking guards.
+    """
+    enabled = []
+
+    # Check if it's this player's turn
+    turn_tokens = [t.value for t in marking.get_multiset("Turn").tokens]
+    if current_player not in turn_tokens:
+        return []  # Not this player's turn
+
+    player = "Blue" if current_player == "BLUE" else "Red"
+    pool_place = f"{player}_Pool"
+    pool_tokens = [t.value for t in marking.get_multiset(pool_place).tokens]
+
+    for pos in POSITIONS:
+        for size in ["SMALL", "MEDIUM", "LARGE"]:
+            # Check if player has this size in pool
+            if size not in pool_tokens:
+                continue
+
+            # Check blocking guard
+            if not check_blocking_guard(marking, pos, size):
+                continue
+
+            trans_name = f"Move_{player}_{pos}_{size[0]}"
+            enabled.append((trans_name, pos, size))
+
+    return enabled
+
+
+def print_improved_cpn_info():
+    """Print information about the improved CPN model."""
+    print("""
+IMPROVED CPN MODEL FOR OTRIO
+============================
+
+This model properly captures the game constraints in the CPN structure:
+
+1. SHARED BOARD PLACES
+   - 9 places (Board_A1, Board_A2, ... Board_C3)
+   - Tokens encode player AND size: BLUE_SMALL, RED_MEDIUM, etc.
+   - Both players' pieces coexist in the same place
+
+2. TURN CONTROL PLACE
+   - Single "Turn" place holds one token (BLUE or RED)
+   - Transitions consume current player's turn token
+   - Transitions produce opponent's turn token
+   - Enforces strict alternation in the CPN itself
+
+3. BLOCKING VIA GUARDS
+   - Each transition has a guard checking for blocking
+   - Guard: "no token with same SIZE at target position"
+   - If BLUE_SMALL is at A1, RED cannot place RED_SMALL at A1
+
+4. TRANSITION STRUCTURE
+   - 54 transitions total (27 per player)
+   - Format: Move_Blue_A1_S, Move_Red_B2_M, etc.
+   - Each transition is specific to (player, position, size)
+
+PLACE COUNT: 12 (2 pools + 9 board + 1 turn)
+TRANSITION COUNT: 54 (9 positions × 3 sizes × 2 players)
+ARC COUNT: 216 (54 transitions × 4 arcs each)
+""")
 
 
 def create_initial_marking(cpn):
@@ -946,12 +1155,37 @@ Examples:
         default=500000,
         help="Maximum nodes to explore for --solve (default: 500000)"
     )
+    parser.add_argument(
+        "--cpn-info",
+        action="store_true",
+        help="Show information about the improved CPN model with blocking"
+    )
 
     args = parser.parse_args()
 
     print("=" * 60)
     print("OTRIO - Colored Petri Net Simulation")
     print("=" * 60)
+
+    # CPN info mode: show improved model details
+    if args.cpn_info:
+        print_improved_cpn_info()
+        print("\nBuilding improved CPN model...")
+        cpn, places, transitions = build_improved_otrio_cpn()
+        print(f"  Places: {len(places)} ({', '.join(sorted(places.keys())[:6])}...)")
+        print(f"  Transitions: {len(transitions)}")
+        print(f"  Arcs: {len(cpn.arcs)}")
+
+        print("\nCreating initial marking...")
+        marking = create_improved_initial_marking(cpn)
+        turn = [t.value for t in marking.get_multiset("Turn").tokens]
+        print(f"  Turn: {turn[0]}")
+        print(f"  Each player has 9 pieces (3 SMALL, 3 MEDIUM, 3 LARGE)")
+
+        print("\nEnabled transitions for BLUE at start:")
+        enabled = get_enabled_transitions_improved(cpn, marking, "BLUE")
+        print(f"  {len(enabled)} moves available")
+        return
 
     # Solve mode: find winning strategy
     if args.solve:

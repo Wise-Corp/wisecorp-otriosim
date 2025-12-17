@@ -2,6 +2,7 @@
 Otrio Game - Streamlit Web Interface
 
 A visual web interface for playing Otrio with AI-powered move analysis.
+Implements the blocking rule: opponent's piece blocks same size at same position.
 
 Usage:
     streamlit run otrio_web.py
@@ -10,6 +11,24 @@ Usage:
 import streamlit as st
 from otrio_cpn import OtrioGameState, POSITIONS, ROWS, COLS, WIN_LINES
 from otrio_consultant import analyze_move, explore_from_state
+
+
+def get_blocked_sizes(state, position, player):
+    """
+    Get sizes that are blocked at a position for a player.
+    A size is blocked if:
+    1. The player already has that size there (can't place same size twice)
+    2. The opponent already has that size there (blocking rule)
+    """
+    opponent = "RED" if player == "BLUE" else "BLUE"
+    blocked_by_self = []
+    blocked_by_opponent = []
+    for size in ["SMALL", "MEDIUM", "LARGE"]:
+        if size in state.board[player][position]:
+            blocked_by_self.append(size)
+        elif size in state.board[opponent][position]:
+            blocked_by_opponent.append(size)
+    return blocked_by_self, blocked_by_opponent
 
 
 # =============================================================================
@@ -236,6 +255,27 @@ def main():
 
         st.divider()
 
+        # Show blocking info for current player
+        if not state.winner:
+            own_blocked = []
+            opp_blocked = []
+            for pos in POSITIONS:
+                by_self, by_opp = get_blocked_sizes(state, pos, state.current_player)
+                if by_self:
+                    own_blocked.append(f"{pos}:{','.join(s[0] for s in by_self)}")
+                if by_opp:
+                    opp_blocked.append(f"{pos}:{','.join(s[0] for s in by_opp)}")
+            if own_blocked or opp_blocked:
+                with st.expander("🚫 Blocked positions", expanded=False):
+                    if own_blocked:
+                        st.caption("Your pieces (can't place same size twice):")
+                        st.markdown(" | ".join(own_blocked))
+                    if opp_blocked:
+                        st.caption("Opponent's pieces (blocking rule):")
+                        st.markdown(" | ".join(opp_blocked))
+
+        st.divider()
+
         st.header("Legend")
         st.markdown(generate_piece_legend(), unsafe_allow_html=True)
 
@@ -273,10 +313,12 @@ def main():
                 format_func=lambda x: f"{x}"
             )
 
-            # Size selection - only show available sizes
+            # Size selection - only show available sizes (respecting blocking rule)
+            opponent = "RED" if state.current_player == "BLUE" else "BLUE"
             available_sizes = [s for s in ["SMALL", "MEDIUM", "LARGE"]
                              if state.initial[state.current_player][s] > 0
-                             and s not in state.board[state.current_player][position]]
+                             and s not in state.board[state.current_player][position]
+                             and s not in state.board[opponent][position]]  # Blocking rule
 
             if available_sizes:
                 size = st.selectbox(
@@ -323,7 +365,17 @@ def main():
 
                         st.caption(f"States analyzed: {analysis['states_explored']:,}")
             else:
-                st.warning("No valid moves for this position!")
+                # Show why there are no moves available
+                by_self, by_opp = get_blocked_sizes(state, position, state.current_player)
+                reasons = []
+                if by_self:
+                    reasons.append(f"You already have: {', '.join(by_self)}")
+                if by_opp:
+                    reasons.append(f"Blocked by opponent: {', '.join(by_opp)}")
+                if reasons:
+                    st.warning(f"No valid moves! {'; '.join(reasons)}")
+                else:
+                    st.warning("No pieces remaining!")
 
             st.divider()
 

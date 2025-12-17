@@ -12,7 +12,6 @@ A simulation/exploration project for **Otrio**, a strategic tic-tac-toe variant 
 - Analyze winning conditions and optimal moves
 
 ## Repository Structure
-- `.gitlab-ci.yml` - GitLab CI/CD pipeline configuration
 - `otrio_cpn.py` - Colored Petri Net implementation of Otrio
 - `otrio_consultant.py` - CLI game consultant for move advice
 - `otrio_web.py` - Streamlit web interface with visual board
@@ -21,8 +20,7 @@ A simulation/exploration project for **Otrio**, a strategic tic-tac-toe variant 
 - **Language**: Python 3.10+
 - **CPN Framework**: cpn-py (Colored Petri Net library)
 - **Web UI**: Streamlit
-- **CI/CD**: GitLab CI
-- **Version Control**: Git (hosted on GitLab and GitHub)
+- **Version Control**: Git (GitHub)
 
 ## CPN Model Architecture
 The game is modeled as a Colored Petri Net with:
@@ -49,7 +47,7 @@ streamlit run otrio_web.py       # Visual board with move analysis
 
 ## Development Workflow
 - Main branch: `master`
-- Remote: `https://gitlab.com/wise-corp/techteam/devops/otriosim.git`
+- Remote: `https://github.com/Wise-Corp/wisecorp-otriosim.git`
 
 ## Game Rules Reference
 - 2-4 players
