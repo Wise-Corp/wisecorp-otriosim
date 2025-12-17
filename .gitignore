@@ -26,3 +26,6 @@ Thumbs.db
 
 # json outputs
 *.json
+
+# txt outputs
+*.txt
