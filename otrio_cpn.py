@@ -1058,6 +1058,1212 @@ def show_strategy_tree(player, cache, max_depth=6):
 
 
 # =============================================================================
+# Compact State Encoding for Efficient BFS
+# =============================================================================
+
+# Position indices: A1=0, A2=1, A3=2, B1=3, B2=4, B3=5, C1=6, C2=7, C3=8
+POS_TO_IDX = {f"{r}{c}": i for i, (r, c) in enumerate(
+    [(r, c) for r in "ABC" for c in "123"]
+)}
+IDX_TO_POS = {i: pos for pos, i in POS_TO_IDX.items()}
+
+# Size indices: SMALL=0, MEDIUM=1, LARGE=2
+SIZE_TO_IDX = {"SMALL": 0, "MEDIUM": 1, "LARGE": 2}
+IDX_TO_SIZE = {0: "SMALL", 1: "MEDIUM", 2: "LARGE"}
+
+
+def encode_state(state):
+    """
+    Encode game state as a 55-bit integer.
+
+    Layout (55 bits total):
+    - Bits 0-26: BLUE board (9 positions × 3 sizes = 27 bits)
+    - Bits 27-53: RED board (9 positions × 3 sizes = 27 bits)
+    - Bit 54: Turn (0=BLUE, 1=RED)
+
+    Each position has 3 bits: bit 0=SMALL present, bit 1=MEDIUM, bit 2=LARGE
+    """
+    encoded = 0
+
+    # Encode BLUE board (bits 0-26)
+    for pos_idx in range(9):
+        pos = IDX_TO_POS[pos_idx]
+        sizes = state.board["BLUE"][pos]
+        for size_idx, size in enumerate(["SMALL", "MEDIUM", "LARGE"]):
+            if size in sizes:
+                bit_pos = pos_idx * 3 + size_idx
+                encoded |= (1 << bit_pos)
+
+    # Encode RED board (bits 27-53)
+    for pos_idx in range(9):
+        pos = IDX_TO_POS[pos_idx]
+        sizes = state.board["RED"][pos]
+        for size_idx, size in enumerate(["SMALL", "MEDIUM", "LARGE"]):
+            if size in sizes:
+                bit_pos = 27 + pos_idx * 3 + size_idx
+                encoded |= (1 << bit_pos)
+
+    # Encode turn (bit 54)
+    if state.current_player == "RED":
+        encoded |= (1 << 54)
+
+    return encoded
+
+
+def decode_move(move_int):
+    """Decode a move from compact integer (0-26) to (position, size)."""
+    pos_idx = move_int // 3
+    size_idx = move_int % 3
+    return (IDX_TO_POS[pos_idx], IDX_TO_SIZE[size_idx])
+
+
+def encode_move(pos, size):
+    """Encode a move (position, size) to compact integer (0-26)."""
+    return POS_TO_IDX[pos] * 3 + SIZE_TO_IDX[size]
+
+
+def apply_moves(moves_list):
+    """Apply a sequence of encoded moves and return the final state."""
+    state = OtrioGameState()
+    for move_int in moves_list:
+        pos, size = decode_move(move_int)
+        state = state.make_move(pos, size)
+    return state
+
+
+def get_valid_moves_fast(state):
+    """Get valid moves as list of encoded integers (0-26)."""
+    moves = []
+    player = state.current_player
+    opponent = "RED" if player == "BLUE" else "BLUE"
+
+    for size_idx, size in enumerate(["SMALL", "MEDIUM", "LARGE"]):
+        if state.initial[player][size] > 0:
+            for pos_idx in range(9):
+                pos = IDX_TO_POS[pos_idx]
+                # Check blocking rule
+                if size not in state.board[player][pos] and size not in state.board[opponent][pos]:
+                    moves.append(pos_idx * 3 + size_idx)
+    return moves
+
+
+def compact_bfs(max_depth=5, verbose=True):
+    """
+    Memory-efficient BFS using compact state encoding.
+
+    Uses 55-bit integers for state keys instead of nested tuples.
+    Implements iterative deepening to find shortest wins first.
+    """
+    from collections import deque
+
+    if verbose:
+        print(f"Compact BFS (max_depth={max_depth})...")
+
+    initial = OtrioGameState()
+    initial_key = encode_state(initial)
+
+    # visited: state_key (int) -> depth
+    visited = {initial_key: 0}
+
+    # Queue: (state, depth, moves_sequence)
+    # moves_sequence is a tuple of encoded move integers
+    queue = deque([(initial, 0, ())])
+
+    stats = {
+        "total": 0,
+        "by_depth": defaultdict(int),
+        "blue_wins": 0,
+        "red_wins": 0,
+        "first_blue_win_depth": None,
+        "first_red_win_depth": None,
+        "first_blue_win_moves": None,
+        "first_red_win_moves": None,
+    }
+
+    while queue:
+        state, depth, moves_seq = queue.popleft()
+        stats["total"] += 1
+        stats["by_depth"][depth] += 1
+
+        if verbose and stats["total"] % 50000 == 0:
+            print(f"  States: {stats['total']:,}, depth={depth}, queue={len(queue):,}, visited={len(visited):,}")
+
+        # Check for win
+        if state.winner:
+            if state.winner == "BLUE":
+                stats["blue_wins"] += 1
+                if stats["first_blue_win_depth"] is None:
+                    stats["first_blue_win_depth"] = depth
+                    stats["first_blue_win_moves"] = moves_seq
+                    if verbose:
+                        print(f"  *** BLUE wins at depth {depth}! ***")
+            else:
+                stats["red_wins"] += 1
+                if stats["first_red_win_depth"] is None:
+                    stats["first_red_win_depth"] = depth
+                    stats["first_red_win_moves"] = moves_seq
+                    if verbose:
+                        print(f"  *** RED wins at depth {depth}! ***")
+            continue
+
+        # Don't expand beyond max_depth
+        if depth >= max_depth:
+            continue
+
+        # Get valid moves and expand
+        for move_int in get_valid_moves_fast(state):
+            pos, size = decode_move(move_int)
+            new_state = state.make_move(pos, size)
+            new_key = encode_state(new_state)
+
+            if new_key not in visited:
+                visited[new_key] = depth + 1
+                queue.append((new_state, depth + 1, moves_seq + (move_int,)))
+
+    if verbose:
+        print(f"\nCompact BFS Complete:")
+        print(f"  Total states: {stats['total']:,}")
+        print(f"  Unique states visited: {len(visited):,}")
+        print(f"  BLUE wins: {stats['blue_wins']}")
+        print(f"  RED wins: {stats['red_wins']}")
+        print(f"  States by depth: {dict(stats['by_depth'])}")
+
+        if stats["first_blue_win_moves"]:
+            print(f"\n  First BLUE win at depth {stats['first_blue_win_depth']}:")
+            print(f"    Moves: {[decode_move(m) for m in stats['first_blue_win_moves']]}")
+
+        if stats["first_red_win_moves"]:
+            print(f"\n  First RED win at depth {stats['first_red_win_depth']}:")
+            print(f"    Moves: {[decode_move(m) for m in stats['first_red_win_moves']]}")
+
+    return visited, stats
+
+
+def iterative_deepening_bfs(max_depth=10, target_player="BLUE", verbose=True):
+    """
+    Iterative deepening BFS to find the shortest winning path.
+
+    Searches depth 1, 2, 3, ... until finding a guaranteed win for target_player.
+    Stops as soon as a win is found (shortest path).
+    """
+    from collections import deque
+
+    if verbose:
+        print(f"Iterative Deepening BFS for {target_player} win...")
+        print(f"  Max depth: {max_depth}")
+
+    for current_max_depth in range(1, max_depth + 1):
+        if verbose:
+            print(f"\n--- Searching depth {current_max_depth} ---")
+
+        initial = OtrioGameState()
+        initial_key = encode_state(initial)
+
+        visited = {initial_key: 0}
+        queue = deque([(initial, 0, ())])
+
+        states_explored = 0
+        wins_found = []
+
+        while queue:
+            state, depth, moves_seq = queue.popleft()
+            states_explored += 1
+
+            if verbose and states_explored % 100000 == 0:
+                print(f"    States: {states_explored:,}, queue={len(queue):,}")
+
+            # Check for target player win
+            if state.winner == target_player:
+                wins_found.append(moves_seq)
+                # Don't expand further from winning states
+                continue
+
+            # Check for opponent win (dead end for us)
+            if state.winner:
+                continue
+
+            # Don't expand beyond current depth limit
+            if depth >= current_max_depth:
+                continue
+
+            # Expand
+            for move_int in get_valid_moves_fast(state):
+                pos, size = decode_move(move_int)
+                new_state = state.make_move(pos, size)
+                new_key = encode_state(new_state)
+
+                if new_key not in visited:
+                    visited[new_key] = depth + 1
+                    queue.append((new_state, depth + 1, moves_seq + (move_int,)))
+
+        if verbose:
+            print(f"    Explored {states_explored:,} states")
+            print(f"    {target_player} wins found: {len(wins_found)}")
+
+        if wins_found:
+            if verbose:
+                print(f"\n*** Found {len(wins_found)} winning path(s) at depth {current_max_depth}! ***")
+                # Show first winning path
+                first_win = wins_found[0]
+                print(f"\nShortest winning sequence ({len(first_win)} moves):")
+                state = OtrioGameState()
+                for i, move_int in enumerate(first_win):
+                    pos, size = decode_move(move_int)
+                    player = state.current_player
+                    print(f"  {i+1}. {player}: {size} at {pos}")
+                    state = state.make_move(pos, size)
+                print(f"\n  Result: {state.winner} WINS!")
+
+            return current_max_depth, wins_found
+
+    if verbose:
+        print(f"\nNo {target_player} win found within depth {max_depth}")
+
+    return None, []
+
+
+# =============================================================================
+# BFS-Based Shortest Path Strategy (Finding Optimal Winning Moves)
+# =============================================================================
+
+def simple_bfs_explore(max_depth=5, verbose=True):
+    """
+    Simple, lightweight BFS exploration of the game tree.
+
+    Only stores minimal data: state_key -> depth
+    Prints statistics as it goes.
+
+    Args:
+        max_depth: Maximum depth to explore
+        verbose: Print progress
+
+    Returns:
+        - visited: dict of state_key -> depth
+        - stats: exploration statistics
+    """
+    from collections import deque
+
+    if verbose:
+        print(f"Simple BFS exploration (max_depth={max_depth})...")
+
+    initial = OtrioGameState()
+    initial_key = initial.to_tuple()
+
+    # Only store: state_key -> depth (minimal memory)
+    visited = {initial_key: 0}
+
+    # Queue contains: (state, depth) - we recreate states as needed
+    queue = deque([(initial, 0)])
+
+    stats = {
+        "total": 0,
+        "by_depth": defaultdict(int),
+        "blue_wins": 0,
+        "red_wins": 0,
+        "terminals": 0,
+    }
+
+    while queue:
+        state, depth = queue.popleft()
+        stats["total"] += 1
+        stats["by_depth"][depth] += 1
+
+        if verbose and stats["total"] % 10000 == 0:
+            print(f"  States: {stats['total']:,}, depth={depth}, queue={len(queue):,}")
+
+        # Check for win
+        if state.winner:
+            stats["terminals"] += 1
+            if state.winner == "BLUE":
+                stats["blue_wins"] += 1
+            else:
+                stats["red_wins"] += 1
+            continue
+
+        # Don't expand beyond max_depth
+        if depth >= max_depth:
+            stats["terminals"] += 1
+            continue
+
+        # Get valid moves and expand
+        for pos, size in state.get_valid_moves():
+            new_state = state.make_move(pos, size)
+            new_key = new_state.to_tuple()
+
+            # Only add if not seen before
+            if new_key not in visited:
+                visited[new_key] = depth + 1
+                queue.append((new_state, depth + 1))
+
+    if verbose:
+        print(f"\nBFS Complete:")
+        print(f"  Total states: {stats['total']:,}")
+        print(f"  BLUE wins: {stats['blue_wins']}")
+        print(f"  RED wins: {stats['red_wins']}")
+        print(f"  States by depth: {dict(stats['by_depth'])}")
+
+    return visited, stats
+
+
+def find_shortest_path_wins(verbose=True, max_states=0, max_depth=10):
+    """
+    Use BFS to find the shortest path from any state to a winning terminal state.
+
+    This implements backward induction:
+    1. First, find all terminal states (wins) using BFS
+    2. Then, propagate distances backward to find optimal moves
+
+    Args:
+        verbose: Print progress
+        max_states: Maximum states to explore (0 = no limit, explore all)
+        max_depth: Maximum depth (moves) to explore (default: 10)
+
+    Returns:
+        - win_distances: dict mapping state -> (winner, min_moves_to_win)
+        - optimal_moves: dict mapping state -> best_move for current player
+        - stats: exploration statistics
+    """
+    from collections import deque
+
+    initial_state = OtrioGameState()
+
+    # Phase 1: BFS to discover all reachable states and their depths
+    if verbose:
+        print("Phase 1: BFS exploration to find all states...")
+        if max_depth > 0:
+            print(f"  (limited to depth {max_depth})")
+        if max_states > 0:
+            print(f"  (limited to {max_states:,} states)")
+
+    visited = {}  # state_tuple -> (state, depth, parent_state, move_to_reach)
+    terminal_states = []  # [(state, depth, winner)]
+
+    queue = deque([(initial_state, 0, None, None)])  # (state, depth, parent, move)
+
+    stats = {
+        "total_states": 0,
+        "terminal_states": 0,
+        "blue_wins": 0,
+        "red_wins": 0,
+        "draws": 0,
+        "min_win_depth": {"BLUE": float('inf'), "RED": float('inf')},
+        "states_by_depth": defaultdict(int),
+    }
+
+    while queue:
+        # Check state limit
+        if max_states > 0 and stats["total_states"] >= max_states:
+            if verbose:
+                print(f"  Reached state limit ({max_states:,}), stopping exploration...")
+            break
+
+        state, depth, parent, move = queue.popleft()
+        state_key = state.to_tuple()
+
+        if state_key in visited:
+            continue
+
+        visited[state_key] = (state, depth, parent, move)
+        stats["total_states"] += 1
+        stats["states_by_depth"][depth] += 1
+
+        if verbose and stats["total_states"] % 50000 == 0:
+            print(f"  Explored {stats['total_states']:,} states (depth {depth})...")
+
+        # Check terminal state
+        if state.winner:
+            terminal_states.append((state, depth, state.winner))
+            stats["terminal_states"] += 1
+            stats[f"{state.winner.lower()}_wins"] += 1
+            stats["min_win_depth"][state.winner] = min(stats["min_win_depth"][state.winner], depth)
+            continue
+
+        moves = state.get_valid_moves()
+        if not moves:
+            terminal_states.append((state, depth, None))  # Draw
+            stats["terminal_states"] += 1
+            stats["draws"] += 1
+            continue
+
+        # Check depth limit - treat as terminal if at max depth
+        if max_depth > 0 and depth >= max_depth:
+            # At max depth, don't expand further - mark as unknown terminal
+            stats["terminal_states"] += 1
+            continue
+
+        # Explore all successors (BFS guarantees shortest path)
+        for pos, size in moves:
+            new_state = state.make_move(pos, size)
+            new_key = new_state.to_tuple()
+            if new_key not in visited:
+                queue.append((new_state, depth + 1, state_key, (pos, size)))
+
+    if verbose:
+        print(f"  Found {stats['total_states']:,} states, {stats['terminal_states']} terminal")
+        print(f"  Earliest BLUE win: move {stats['min_win_depth']['BLUE']}")
+        print(f"  Earliest RED win: move {stats['min_win_depth']['RED']}")
+
+    # Phase 2: Backward induction to compute optimal values
+    if verbose:
+        print("\nPhase 2: Backward induction for optimal strategy...")
+
+    # For each state, compute: (game_value, moves_to_end, best_move)
+    # game_value: 1 = BLUE wins, -1 = RED wins, 0 = draw
+    # moves_to_end: minimum moves to reach terminal state with optimal play
+    state_values = {}  # state_key -> (value, moves_to_end, best_move)
+
+    # Initialize terminal states
+    for state, depth, winner in terminal_states:
+        state_key = state.to_tuple()
+        if winner == "BLUE":
+            state_values[state_key] = (1, 0, None)
+        elif winner == "RED":
+            state_values[state_key] = (-1, 0, None)
+        else:
+            state_values[state_key] = (0, 0, None)
+
+    # Process states in reverse BFS order (highest depth first)
+    max_depth_found = max(stats["states_by_depth"].keys())
+
+    for depth in range(max_depth_found, -1, -1):
+        if verbose and depth % 5 == 0:
+            print(f"  Processing depth {depth}...")
+
+        # Get all states at this depth
+        states_at_depth = [(k, v) for k, v in visited.items()
+                          if v[1] == depth and k not in state_values]
+
+        for state_key, (state, d, parent, move) in states_at_depth:
+            moves = state.get_valid_moves()
+
+            if not moves:
+                # Terminal state (draw) - should already be in state_values
+                continue
+
+            player = state.current_player
+
+            # Compute value based on successors
+            best_value = None
+            best_moves_to_end = None
+            best_move = None
+
+            for pos, size in moves:
+                new_state = state.make_move(pos, size)
+                new_key = new_state.to_tuple()
+
+                if new_key not in state_values:
+                    # Successor not yet computed - this shouldn't happen in reverse BFS
+                    continue
+
+                succ_value, succ_moves, _ = state_values[new_key]
+                moves_to_end = succ_moves + 1
+
+                if player == "BLUE":
+                    # BLUE maximizes value, prefers faster wins
+                    if best_value is None:
+                        best_value = succ_value
+                        best_moves_to_end = moves_to_end
+                        best_move = (pos, size)
+                    elif succ_value > best_value:
+                        best_value = succ_value
+                        best_moves_to_end = moves_to_end
+                        best_move = (pos, size)
+                    elif succ_value == best_value:
+                        # Same value: prefer shorter path for wins, longer for losses
+                        if succ_value > 0 and moves_to_end < best_moves_to_end:
+                            best_moves_to_end = moves_to_end
+                            best_move = (pos, size)
+                        elif succ_value < 0 and moves_to_end > best_moves_to_end:
+                            best_moves_to_end = moves_to_end
+                            best_move = (pos, size)
+                else:
+                    # RED minimizes value, prefers faster wins
+                    if best_value is None:
+                        best_value = succ_value
+                        best_moves_to_end = moves_to_end
+                        best_move = (pos, size)
+                    elif succ_value < best_value:
+                        best_value = succ_value
+                        best_moves_to_end = moves_to_end
+                        best_move = (pos, size)
+                    elif succ_value == best_value:
+                        # Same value: prefer shorter path for wins, longer for losses
+                        if succ_value < 0 and moves_to_end < best_moves_to_end:
+                            best_moves_to_end = moves_to_end
+                            best_move = (pos, size)
+                        elif succ_value > 0 and moves_to_end > best_moves_to_end:
+                            best_moves_to_end = moves_to_end
+                            best_move = (pos, size)
+
+            if best_value is not None:
+                state_values[state_key] = (best_value, best_moves_to_end, best_move)
+
+    if verbose:
+        initial_key = initial_state.to_tuple()
+        if initial_key in state_values:
+            value, moves, best_move = state_values[initial_key]
+            winner = "BLUE" if value > 0 else ("RED" if value < 0 else "DRAW")
+            print(f"\n  Initial state value: {value} ({winner})")
+            print(f"  Optimal play ends in {moves} moves")
+            if best_move:
+                print(f"  Best opening move: {best_move[1]} at {best_move[0]}")
+
+    return state_values, visited, stats
+
+
+def find_shortest_win_strategy(player="BLUE", verbose=True, max_states=0, max_depth=10):
+    """
+    Find the shortest-path winning strategy for a player using complete BFS.
+
+    This explores the game tree up to max_depth and uses backward induction to find
+    the optimal strategy that minimizes moves to win.
+
+    Args:
+        player: "BLUE" or "RED"
+        verbose: Print progress
+        max_states: Maximum states to explore (0 = no limit)
+        max_depth: Maximum depth (moves) to explore (default: 10)
+
+    Returns:
+        - result: 1 = player can force win, -1 = opponent wins, 0 = draw
+        - optimal_moves: dict mapping state_key -> (best_pos, best_size)
+        - win_in_moves: number of moves to win with optimal play
+        - stats: exploration statistics
+        - state_values: computed state values for reuse
+        - visited: visited states dict for reuse
+    """
+    if verbose:
+        print(f"\n{'='*60}")
+        print(f"SHORTEST-PATH WINNING STRATEGY FOR {player}")
+        print(f"{'='*60}")
+
+    state_values, visited, stats = find_shortest_path_wins(verbose, max_states, max_depth)
+
+    initial_state = OtrioGameState()
+    initial_key = initial_state.to_tuple()
+
+    if initial_key not in state_values:
+        if verbose:
+            print("\nError: Initial state not in computed values!")
+        return 0, {}, 0, stats
+
+    value, moves_to_end, best_move = state_values[initial_key]
+
+    # Extract optimal moves for the target player
+    optimal_moves = {}
+    for state_key, (val, moves, best) in state_values.items():
+        if best is not None:
+            state, depth, _, _ = visited[state_key]
+            if state.current_player == player:
+                optimal_moves[state_key] = best
+
+    # Determine result from player's perspective
+    if player == "BLUE":
+        result = value
+    else:
+        result = -value
+
+    if verbose:
+        print(f"\n{'='*60}")
+        print(f"RESULT")
+        print(f"{'='*60}")
+        if result > 0:
+            print(f"*** {player} HAS A GUARANTEED WIN ***")
+            print(f"With optimal play, {player} wins in {moves_to_end} moves")
+        elif result < 0:
+            opponent = "RED" if player == "BLUE" else "BLUE"
+            print(f"*** {opponent} HAS A GUARANTEED WIN ***")
+            print(f"{player} cannot force a win")
+        else:
+            print(f"Game is a DRAW with optimal play")
+
+        if best_move:
+            print(f"\nBest opening move: {best_move[1]} at {best_move[0]}")
+
+        print(f"\nStatistics:")
+        print(f"  Total states explored: {stats['total_states']:,}")
+        print(f"  Terminal states: {stats['terminal_states']}")
+        print(f"  BLUE wins: {stats['blue_wins']}")
+        print(f"  RED wins: {stats['red_wins']}")
+        print(f"  Draws: {stats['draws']}")
+
+    return result, optimal_moves, moves_to_end, stats, state_values, visited
+
+
+def show_shortest_win_path(player="BLUE", state_values=None, visited=None):
+    """
+    Show the shortest winning path for a player.
+    """
+    if state_values is None:
+        state_values, visited, _ = find_shortest_path_wins(verbose=False)
+
+    state = OtrioGameState()
+    opponent = "RED" if player == "BLUE" else "BLUE"
+    move_num = 0
+
+    print(f"\n{'='*60}")
+    print(f"SHORTEST WINNING PATH FOR {player}")
+    print(f"{'='*60}")
+    print(f"\nNote: >>> marks {player}'s optimal moves")
+    print(f"      {opponent}'s moves are also optimal (best defense)\n")
+
+    while not state.winner:
+        state_key = state.to_tuple()
+
+        if state_key not in state_values:
+            print(f"  (state not in computed values)")
+            break
+
+        value, moves_left, best_move = state_values[state_key]
+
+        if best_move is None:
+            print(f"  (no move found)")
+            break
+
+        pos, size = best_move
+        current = state.current_player
+
+        marker = ">>>" if current == player else "   "
+        value_str = f"(value={value:+d}, {moves_left} to end)"
+        print(f"{marker} {move_num + 1}. {current}: {size[0]} at {pos} {value_str}")
+
+        state = state.make_move(pos, size)
+        move_num += 1
+
+        if state.winner:
+            print(f"\n    === {state.winner} WINS in {move_num} moves! ===")
+            break
+
+        if move_num > 20:
+            print("  (path truncated)")
+            break
+
+
+# =============================================================================
+# Strategy Verification - Exhaustive Check Against All Opponent Responses
+# =============================================================================
+
+def verify_strategy(verbose=True):
+    """
+    Verify the user's winning strategy by exploring ALL possible RED responses.
+
+    The strategy is:
+    1B: BLUE plays M at B2 (center)
+    1R: RED plays anything
+    2B: BLUE responds based on RED's move:
+        - If RED plays S or L at B2: BLUE plays L elsewhere (e.g., A1)
+        - If RED plays elsewhere: BLUE plays same size contiguous to RED's move
+    2R: RED must defend
+    3B: BLUE plays S at same position as previous L (creating nested or double threat)
+
+    This function exhaustively explores ALL RED responses to verify BLUE always wins.
+    """
+
+    print("=" * 70)
+    print("STRATEGY VERIFICATION: Checking BLUE wins against ALL RED responses")
+    print("=" * 70)
+
+    # Step 1: BLUE plays M at B2
+    initial = OtrioGameState()
+    state_after_1b = initial.make_move("B2", "MEDIUM")
+
+    print(f"\n1B: BLUE plays MEDIUM at B2 (center)")
+
+    # Get ALL possible RED responses
+    red_moves = state_after_1b.get_valid_moves()
+    print(f"\n1R: RED has {len(red_moves)} possible responses")
+
+    total_branches = 0
+    blue_wins = 0
+    red_wins = 0
+    red_blocks = []  # Track any RED move that blocks the strategy
+
+    # Explore ALL RED responses
+    for red_pos, red_size in red_moves:
+        if verbose:
+            print(f"\n{'='*60}")
+            print(f"Analyzing: RED plays {red_size} at {red_pos}")
+            print(f"{'='*60}")
+
+        state_after_1r = state_after_1b.make_move(red_pos, red_size)
+
+        # Determine BLUE's response based on the strategy
+        if red_pos == "B2":
+            # RED plays at center - BLUE plays L elsewhere
+            # Try A1 first, or find another position
+            blue_2b_moves = []
+            for pos in POSITIONS:
+                if pos != "B2":
+                    blue_2b_moves.append((pos, "LARGE"))
+
+            # For each possible BLUE response, check if we can win
+            for blue_2b_pos, blue_2b_size in blue_2b_moves:
+                result = analyze_branch(
+                    state_after_1r,
+                    blue_2b_pos, blue_2b_size,
+                    f"RED {red_size} at {red_pos}",
+                    verbose=verbose
+                )
+                total_branches += 1
+                if result == "BLUE":
+                    blue_wins += 1
+                    break  # Found a winning response for this RED move
+                elif result == "RED":
+                    red_wins += 1
+        else:
+            # RED plays elsewhere - BLUE plays same size contiguous to RED's move
+            # Find contiguous positions to RED's move
+            contiguous = get_contiguous_positions(red_pos)
+
+            blue_response_found = False
+            for cont_pos in contiguous:
+                # Try to play RED's size at contiguous position
+                try:
+                    state_test = state_after_1r.copy()
+                    # Check if this move is valid
+                    moves = state_test.get_valid_moves()
+                    if (cont_pos, red_size) in moves:
+                        result = analyze_branch(
+                            state_after_1r,
+                            cont_pos, red_size,
+                            f"RED {red_size} at {red_pos}",
+                            verbose=verbose
+                        )
+                        total_branches += 1
+                        if result == "BLUE":
+                            blue_wins += 1
+                            blue_response_found = True
+                            break
+                        elif result == "RED":
+                            red_wins += 1
+                except:
+                    pass
+
+            if not blue_response_found:
+                # Try alternative responses - play L at any position to create threat
+                for pos in POSITIONS:
+                    if pos != red_pos and pos != "B2":
+                        moves = state_after_1r.get_valid_moves()
+                        if (pos, "LARGE") in moves:
+                            result = analyze_branch(
+                                state_after_1r,
+                                pos, "LARGE",
+                                f"RED {red_size} at {red_pos}",
+                                verbose=verbose
+                            )
+                            total_branches += 1
+                            if result == "BLUE":
+                                blue_wins += 1
+                                blue_response_found = True
+                                break
+
+            if not blue_response_found:
+                red_blocks.append((red_pos, red_size))
+                if verbose:
+                    print(f"  WARNING: No winning response found for RED {red_size} at {red_pos}")
+
+    # Summary
+    print("\n" + "=" * 70)
+    print("VERIFICATION SUMMARY")
+    print("=" * 70)
+    print(f"Total RED responses analyzed: {len(red_moves)}")
+    print(f"Total branches explored: {total_branches}")
+    print(f"BLUE wins: {blue_wins}")
+    print(f"RED wins: {red_wins}")
+
+    if red_blocks:
+        print(f"\nRED blocking moves found ({len(red_blocks)}):")
+        for pos, size in red_blocks:
+            print(f"  - {size} at {pos}")
+        return False
+    else:
+        print(f"\n*** STRATEGY VERIFIED: BLUE wins against ALL RED responses! ***")
+        return True
+
+
+def get_contiguous_positions(pos):
+    """Get positions contiguous to the given position (same row, column, or diagonal)."""
+    row = pos[0]
+    col = pos[1]
+
+    contiguous = []
+
+    # Same row
+    for c in "123":
+        if c != col:
+            contiguous.append(f"{row}{c}")
+
+    # Same column
+    for r in "ABC":
+        if r != row:
+            contiguous.append(f"{r}{col}")
+
+    # Diagonals
+    row_idx = "ABC".index(row)
+    col_idx = "123".index(col)
+
+    # Main diagonal (A1-B2-C3)
+    if row_idx == col_idx or abs(row_idx - col_idx) <= 1:
+        for i in range(3):
+            r = "ABC"[i]
+            c = "123"[i]
+            if f"{r}{c}" != pos and f"{r}{c}" not in contiguous:
+                # Only add if on same diagonal
+                if i - row_idx == int(c) - 1 - col_idx:
+                    contiguous.append(f"{r}{c}")
+
+    # Anti-diagonal (A3-B2-C1)
+    if row_idx + col_idx == 2 or abs((row_idx + col_idx) - 2) <= 1:
+        for i in range(3):
+            r = "ABC"[i]
+            c = "123"[2-i]
+            if f"{r}{c}" != pos and f"{r}{c}" not in contiguous:
+                if i + (2-i) == row_idx + col_idx:
+                    contiguous.append(f"{r}{c}")
+
+    return contiguous
+
+
+def analyze_branch(state, blue_pos, blue_size, context, verbose=True, depth=0, max_depth=6):
+    """
+    Analyze a branch of the game tree from the given state.
+    BLUE plays (blue_pos, blue_size), then we explore ALL RED responses.
+
+    Uses minimax to determine if BLUE can force a win from this position.
+    Returns: "BLUE", "RED", or "DRAW"
+    """
+    if depth > max_depth:
+        return "UNKNOWN"
+
+    indent = "  " * depth
+
+    # BLUE makes the move
+    try:
+        state_after_blue = state.make_move(blue_pos, blue_size)
+    except ValueError as e:
+        if verbose:
+            print(f"{indent}Invalid move: {blue_size} at {blue_pos}: {e}")
+        return "INVALID"
+
+    if verbose and depth <= 2:
+        move_num = depth // 2 + 2
+        print(f"{indent}{move_num}B: BLUE plays {blue_size} at {blue_pos}")
+
+    # Check if BLUE won
+    if state_after_blue.winner == "BLUE":
+        if verbose and depth <= 2:
+            print(f"{indent}    -> BLUE WINS!")
+        return "BLUE"
+
+    # Get RED's possible responses
+    red_moves = state_after_blue.get_valid_moves()
+
+    if not red_moves:
+        return "DRAW"
+
+    # For each RED response, find BLUE's best counter
+    # BLUE wins if there exists a winning response for ALL RED moves
+    all_blue_wins = True
+
+    for red_pos, red_size in red_moves:
+        try:
+            state_after_red = state_after_blue.make_move(red_pos, red_size)
+        except:
+            continue
+
+        if verbose and depth <= 1:
+            move_num = depth // 2 + 2
+            print(f"{indent}  {move_num}R: if RED plays {red_size} at {red_pos}...")
+
+        # Check if RED won
+        if state_after_red.winner == "RED":
+            if verbose and depth <= 1:
+                print(f"{indent}      -> RED WINS (strategy fails here)")
+            return "RED"
+
+        # Find BLUE's best response to this RED move
+        blue_responses = state_after_red.get_valid_moves()
+
+        if not blue_responses:
+            all_blue_wins = False
+            continue
+
+        # Try each BLUE response - we need at least ONE winning response
+        found_winning_response = False
+        for b_pos, b_size in blue_responses:
+            result = analyze_branch(
+                state_after_red,
+                b_pos, b_size,
+                f"{context} -> RED {red_size}@{red_pos}",
+                verbose=False,  # Reduce verbosity in deep recursion
+                depth=depth + 2,
+                max_depth=max_depth
+            )
+            if result == "BLUE":
+                found_winning_response = True
+                if verbose and depth <= 1:
+                    print(f"{indent}      -> BLUE wins with {b_size} at {b_pos}")
+                break
+
+        if not found_winning_response:
+            all_blue_wins = False
+            if verbose and depth <= 1:
+                print(f"{indent}      -> No winning response found")
+
+    return "BLUE" if all_blue_wins else "UNKNOWN"
+
+
+def explore_game_tree(output_file, verbose=True):
+    """
+    Exhaustively explore ALL game sequences until terminal states.
+    Streams directly to JSON file to minimize memory usage.
+
+    JSON structure:
+    - Internal: {"m": "SA1", "c": [...]}
+    - Leaf: {"m": "LC3", "r": "B"|"R"|"D"}
+      r = B (BLUE wins), R (RED wins), D (DRAW)
+    """
+    print("=" * 60)
+    print("EXHAUSTIVE GAME TREE (streaming)")
+    print("=" * 60)
+    print(f"Output: {output_file}")
+    print()
+
+    stats = {"nodes": 0, "B": 0, "R": 0, "D": 0}
+    last_report = [0]
+
+    def get_mem_mb():
+        try:
+            import psutil
+            return psutil.Process().memory_info().rss / 1024 / 1024
+        except:
+            return 0
+
+    def report():
+        mem = get_mem_mb()
+        mem_str = f"  Mem: {mem:.0f}MB" if mem > 0 else ""
+        print(f"  Nodes: {stats['nodes']:,}  B:{stats['B']:,} R:{stats['R']:,} D:{stats['D']:,}{mem_str}")
+
+    def write_tree(f, state, is_first_child):
+        """Stream tree node directly to file."""
+        stats["nodes"] += 1
+
+        if stats["nodes"] - last_report[0] >= 100000:
+            last_report[0] = stats["nodes"]
+            if verbose:
+                report()
+
+        # Get move that led here (for non-root)
+        if state.move_history:
+            _, pos, size = state.move_history[-1]
+            move_str = f"{size[0]}{pos}"
+        else:
+            move_str = None
+
+        # Comma separator for non-first children
+        if not is_first_child:
+            f.write(",")
+
+        # Terminal: BLUE wins
+        if state.winner == "BLUE":
+            stats["B"] += 1
+            f.write(f'{{"m":"{move_str}","r":"B"}}')
+            return
+
+        # Terminal: RED wins
+        if state.winner == "RED":
+            stats["R"] += 1
+            f.write(f'{{"m":"{move_str}","r":"R"}}')
+            return
+
+        moves = state.get_valid_moves()
+
+        # Terminal: DRAW
+        if not moves:
+            stats["D"] += 1
+            f.write(f'{{"m":"{move_str}","r":"D"}}')
+            return
+
+        # Internal node
+        if move_str:
+            f.write(f'{{"m":"{move_str}","c":[')
+        else:
+            f.write('{"c":[')
+
+        # Write children
+        for i, (pos, size) in enumerate(moves):
+            new_state = state.make_move(pos, size)
+            write_tree(f, new_state, i == 0)
+
+        f.write("]}")
+
+    print("Streaming to file...")
+    if verbose:
+        report()
+
+    with open(output_file, 'w') as f:
+        f.write('{"tree":')
+        write_tree(f, OtrioGameState(), True)
+        f.write(f',"stats":{{"nodes":{stats["nodes"]},"B":{stats["B"]},"R":{stats["R"]},"D":{stats["D"]}}}}}')
+
+    print()
+    print("=" * 60)
+    print(f"Nodes: {stats['nodes']:,}")
+    print(f"BLUE wins: {stats['B']:,}")
+    print(f"RED wins: {stats['R']:,}")
+    print(f"Draws: {stats['D']:,}")
+    print(f"\nWrote to {output_file}")
+
+
+def show_winning_lines(state, player):
+    """Show all winning lines (threats) for a player."""
+    board = state.board[player]
+    threats = []
+
+    for line in WIN_LINES:
+        # Check same-size threats
+        for size in ["SMALL", "MEDIUM", "LARGE"]:
+            count = sum(1 for pos in line if size in board[pos])
+            if count == 2:
+                empty_pos = [pos for pos in line if size not in board[pos]][0]
+                # Check if this position is actually playable
+                opponent = "RED" if player == "BLUE" else "BLUE"
+                if size not in state.board[opponent][empty_pos]:
+                    threats.append((line, f"Same {size[0]}", empty_pos, size))
+
+        # Check ascending sequence threats
+        sizes_in_line = []
+        for i, pos in enumerate(line):
+            expected = ["SMALL", "MEDIUM", "LARGE"][i]
+            if expected in board[pos]:
+                sizes_in_line.append(i)
+
+        if len(sizes_in_line) == 2:
+            missing_idx = 3 - sum(sizes_in_line)  # Find missing position
+            if 0 <= missing_idx < 3:
+                missing_pos = line[missing_idx]
+                missing_size = ["SMALL", "MEDIUM", "LARGE"][missing_idx]
+                opponent = "RED" if player == "BLUE" else "BLUE"
+                if missing_size not in state.board[opponent][missing_pos]:
+                    threats.append((line, "Ascending", missing_pos, missing_size))
+
+        # Check descending sequence threats
+        sizes_in_line = []
+        for i, pos in enumerate(line):
+            expected = ["LARGE", "MEDIUM", "SMALL"][i]
+            if expected in board[pos]:
+                sizes_in_line.append(i)
+
+        if len(sizes_in_line) == 2:
+            missing_idx = 3 - sum(sizes_in_line)
+            if 0 <= missing_idx < 3:
+                missing_pos = line[missing_idx]
+                missing_size = ["LARGE", "MEDIUM", "SMALL"][missing_idx]
+                opponent = "RED" if player == "BLUE" else "BLUE"
+                if missing_size not in state.board[opponent][missing_pos]:
+                    threats.append((line, "Descending", missing_pos, missing_size))
+
+    # Check nested threats (2 sizes in same position)
+    for pos in POSITIONS:
+        if len(board[pos]) == 2:
+            missing = [s for s in ["SMALL", "MEDIUM", "LARGE"] if s not in board[pos]][0]
+            opponent = "RED" if player == "BLUE" else "BLUE"
+            if missing not in state.board[opponent][pos]:
+                threats.append(([pos], "Nested", pos, missing))
+
+    return threats
+
+
+def analyze_move_rankings_bfs(state=None, verbose=True):
+    """
+    Rank all possible moves from the current state using BFS shortest-path analysis.
+
+    Returns moves ranked by:
+    1. Win probability (guaranteed win = 100%, guaranteed loss = 0%)
+    2. Moves to end (fewer is better for wins, more is better to delay losses)
+    """
+    if state is None:
+        state = OtrioGameState()
+
+    state_values, visited, stats = find_shortest_path_wins(verbose=False)
+
+    player = state.current_player
+    moves = state.get_valid_moves()
+
+    rankings = []
+
+    for pos, size in moves:
+        new_state = state.make_move(pos, size)
+        new_key = new_state.to_tuple()
+
+        if new_state.winner == player:
+            # Immediate win
+            rankings.append({
+                "move": (pos, size),
+                "result": "WIN",
+                "value": 1 if player == "BLUE" else -1,
+                "moves_to_end": 1,
+                "description": "Immediate WIN!"
+            })
+        elif new_key in state_values:
+            value, moves_to_end, _ = state_values[new_key]
+
+            # Adjust value to be from current player's perspective
+            if player == "RED":
+                value = -value
+
+            if value > 0:
+                result = "WIN"
+                desc = f"Forces win in {moves_to_end + 1} moves"
+            elif value < 0:
+                result = "LOSS"
+                desc = f"Leads to loss in {moves_to_end + 1} moves"
+            else:
+                result = "DRAW"
+                desc = f"Leads to draw in {moves_to_end + 1} moves"
+
+            rankings.append({
+                "move": (pos, size),
+                "result": result,
+                "value": value,
+                "moves_to_end": moves_to_end + 1,
+                "description": desc
+            })
+        else:
+            rankings.append({
+                "move": (pos, size),
+                "result": "UNKNOWN",
+                "value": 0,
+                "moves_to_end": 999,
+                "description": "Not in computed states"
+            })
+
+    # Sort: wins first (by fastest), then draws, then losses (by slowest)
+    def sort_key(r):
+        if r["result"] == "WIN":
+            return (0, r["moves_to_end"])  # Wins first, faster better
+        elif r["result"] == "DRAW":
+            return (1, 0)  # Draws second
+        elif r["result"] == "LOSS":
+            return (2, -r["moves_to_end"])  # Losses last, slower better
+        else:
+            return (3, 0)  # Unknown last
+
+    rankings.sort(key=sort_key)
+
+    if verbose:
+        print(f"\n{'='*60}")
+        print(f"MOVE RANKINGS FOR {player} (BFS Shortest-Path Analysis)")
+        print(f"{'='*60}")
+
+        for i, r in enumerate(rankings):
+            pos, size = r["move"]
+            print(f"{i+1:3}. {size[0]}@{pos:2} -> {r['result']:4} | {r['description']}")
+
+    return rankings
+
+
+# =============================================================================
 # Sample Game Simulation (using OtrioGameState)
 # =============================================================================
 
@@ -1160,12 +2366,118 @@ Examples:
         action="store_true",
         help="Show information about the improved CPN model with blocking"
     )
+    parser.add_argument(
+        "--bfs-solve",
+        action="store_true",
+        help="Find winning strategy using BFS shortest-path analysis"
+    )
+    parser.add_argument(
+        "--simple-bfs",
+        action="store_true",
+        help="Run simple BFS exploration (just counts states)"
+    )
+    parser.add_argument(
+        "--compact-bfs",
+        action="store_true",
+        help="Run compact BFS with 55-bit state encoding"
+    )
+    parser.add_argument(
+        "--find-win",
+        action="store_true",
+        help="Use iterative deepening to find shortest win"
+    )
+    parser.add_argument(
+        "--bfs-depth",
+        type=int,
+        default=5,
+        help="Maximum depth (moves ahead) for BFS exploration (default: 5)"
+    )
+    parser.add_argument(
+        "--show-path",
+        action="store_true",
+        help="Show the shortest winning path (use with --bfs-solve)"
+    )
+    parser.add_argument(
+        "--tree",
+        type=str,
+        metavar="FILE",
+        help="Export full game tree to JSON file (explores ALL sequences)"
+    )
 
     args = parser.parse_args()
 
     print("=" * 60)
     print("OTRIO - Colored Petri Net Simulation")
     print("=" * 60)
+
+    # Export full game tree
+    if args.tree:
+        explore_game_tree(args.tree, verbose=not args.quiet)
+        return
+
+    # Find shortest win using iterative deepening
+    if args.find_win:
+        player = args.player.upper()
+        print(f"\nSearching for shortest {player} win...")
+        print("-" * 40)
+
+        win_depth, wins = iterative_deepening_bfs(
+            max_depth=args.bfs_depth,
+            target_player=player,
+            verbose=True
+        )
+
+        print("\n" + "=" * 60)
+        if win_depth:
+            print(f"Found {player} win at depth {win_depth}!")
+        else:
+            print(f"No {player} win found within depth {args.bfs_depth}")
+        return
+
+    # Compact BFS mode: memory-efficient exploration
+    if args.compact_bfs:
+        print(f"\nCompact BFS exploration...")
+        print(f"  Depth limit: {args.bfs_depth} moves")
+        print("-" * 40)
+
+        visited, stats = compact_bfs(max_depth=args.bfs_depth, verbose=True)
+
+        print("\n" + "=" * 60)
+        print("Compact BFS complete!")
+        return
+
+    # Simple BFS mode: just explore and count states
+    if args.simple_bfs:
+        print(f"\nSimple BFS exploration...")
+        print(f"  Depth limit: {args.bfs_depth} moves")
+        print("-" * 40)
+
+        visited, stats = simple_bfs_explore(max_depth=args.bfs_depth, verbose=True)
+
+        print("\n" + "=" * 60)
+        print("Simple BFS complete!")
+        return
+
+    # BFS solve mode: complete game tree analysis with shortest paths
+    if args.bfs_solve:
+        player = args.player.upper()
+        print(f"\nBFS Shortest-Path Strategy Analysis for {player}...")
+        print(f"  Depth limit: {args.bfs_depth} moves")
+        print("-" * 40)
+
+        result, optimal_moves, win_in_moves, stats, state_values, visited = find_shortest_win_strategy(
+            player=player,
+            verbose=not args.quiet,
+            max_states=args.max_states,
+            max_depth=args.bfs_depth
+        )
+
+        if args.show_path:
+            show_shortest_win_path(player, state_values, visited)
+
+        print("\n" + "=" * 60)
+        print("BFS analysis complete!")
+        return
 
     # CPN info mode: show improved model details
     if args.cpn_info:
