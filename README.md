@@ -112,6 +112,8 @@ Then open http://localhost:8501 in your browser.
 
 ![Otrio Web Interface](docs/otrio_web_screenshot.png)
 
+*Screenshot shows the winning strategy in action: BLUE opened with M@B2 (center), RED responded with L@A3, BLUE countered with L@A2 creating threats. After 5 moves, BLUE has multiple winning paths while RED struggles to defend.*
+
 ### 3. Command-Line Consultant
 
 Use the CLI consultant for move advice during a real game:
