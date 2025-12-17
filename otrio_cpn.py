@@ -2126,6 +2126,155 @@ def explore_game_tree(output_file, verbose=True, max_depth=None):
     print(f"\nWrote to {output_file}")
 
 
+def explore_game_tree_parallel(output_file, verbose=True, max_depth=None, num_workers=None):
+    """
+    Multi-threaded exhaustive game tree exploration.
+    Parallelizes at the opening move level (27 moves across N workers).
+    Each worker writes to a temp file, then files are merged.
+    """
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    import tempfile
+    import os
+    import time
+
+    if num_workers is None:
+        num_workers = mp.cpu_count()
+
+    print("=" * 60)
+    print("EXHAUSTIVE GAME TREE (parallel)")
+    print("=" * 60)
+    print(f"Output: {output_file}")
+    print(f"Workers: {num_workers}")
+    if max_depth:
+        print(f"Max depth: {max_depth}")
+    print()
+
+    # Get all opening moves
+    initial_state = OtrioGameState()
+    opening_moves = initial_state.get_valid_moves()
+    print(f"Parallelizing {len(opening_moves)} opening moves...")
+    print()
+
+    start_time = time.time()
+
+    # Process each opening move in parallel
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        futures = {}
+        for pos, size in opening_moves:
+            move_str = f"{size[0]}{pos}"
+            state = initial_state.make_move(pos, size)
+            future = executor.submit(_explore_subtree, state, move_str, max_depth, verbose)
+            futures[future] = move_str
+
+        results = {}
+        total_stats = {"nodes": 0, "B": 0, "R": 0, "D": 0, "L": 0}
+
+        for future in as_completed(futures):
+            move_str = futures[future]
+            try:
+                json_str, stats = future.result()
+                results[move_str] = json_str
+                for k in total_stats:
+                    total_stats[k] += stats[k]
+                elapsed = time.time() - start_time
+                print(f"  {move_str} done: nodes={stats['nodes']:,} B={stats['B']:,} R={stats['R']:,} D={stats['D']:,} L={stats['L']:,} [{elapsed:.1f}s]")
+            except Exception as e:
+                print(f"  {move_str} FAILED: {e}")
+
+    # Merge results in move order
+    print()
+    print("Merging results...")
+
+    with open(output_file, 'w') as f:
+        f.write('{"tree":{"c":[')
+        first = True
+        for pos, size in opening_moves:
+            move_str = f"{size[0]}{pos}"
+            if move_str in results:
+                if not first:
+                    f.write(",")
+                f.write(results[move_str])
+                first = False
+        f.write(']}\n')
+        f.write(f',"stats":{{"nodes":{total_stats["nodes"]},"B":{total_stats["B"]},"R":{total_stats["R"]},"D":{total_stats["D"]},"L":{total_stats["L"]}}}}}\n')
+
+    elapsed = time.time() - start_time
+    print()
+    print("=" * 60)
+    print(f"Nodes: {total_stats['nodes']:,}")
+    print(f"BLUE wins: {total_stats['B']:,}")
+    print(f"RED wins: {total_stats['R']:,}")
+    print(f"Draws: {total_stats['D']:,}")
+    if max_depth:
+        print(f"Depth limit: {total_stats['L']:,}")
+    print(f"Time: {elapsed:.1f}s")
+    print(f"\nWrote to {output_file}")
+
+
+def _explore_subtree(state, move_str, max_depth, verbose):
+    """
+    Worker function: explore a subtree and return JSON string + stats.
+    Called by ProcessPoolExecutor.
+    """
+    import io
+
+    stats = {"nodes": 0, "B": 0, "R": 0, "D": 0, "L": 0}
+
+    def build_tree(state, depth):
+        """Build tree as nested dict, then serialize."""
+        stats["nodes"] += 1
+
+        # Get move string
+        if state.move_history:
+            _, pos, size = state.move_history[-1]
+            m = f"{size[0]}{pos}"
+        else:
+            m = None
+
+        # Terminal: BLUE wins
+        if state.winner == "BLUE":
+            stats["B"] += 1
+            return {"m": m, "r": "B"}
+
+        # Terminal: RED wins
+        if state.winner == "RED":
+            stats["R"] += 1
+            return {"m": m, "r": "R"}
+
+        moves = state.get_valid_moves()
+
+        # Terminal: DRAW
+        if not moves:
+            stats["D"] += 1
+            return {"m": m, "r": "D"}
+
+        # Terminal: Depth limit
+        if max_depth and depth >= max_depth:
+            stats["L"] += 1
+            return {"m": m, "r": "L"}
+
+        # Internal node
+        children = []
+        for pos, size in moves:
+            new_state = state.make_move(pos, size)
+            children.append(build_tree(new_state, depth + 1))
+
+        return {"m": m, "c": children}
+
+    # Build tree starting at depth 1 (opening move already made)
+    tree = build_tree(state, 1)
+
+    # Serialize to compact JSON
+    def to_json(node):
+        if "r" in node:
+            return f'{{"m":"{node["m"]}","r":"{node["r"]}"}}'
+        children_json = ",".join(to_json(c) for c in node["c"])
+        return f'{{"m":"{node["m"]}","c":[{children_json}]}}\n'
+
+    return to_json(tree), stats
+
+
 def show_winning_lines(state, player):
     """Show all winning lines (threats) for a player."""
     board = state.board[player]
@@ -2420,6 +2569,14 @@ Examples:
         metavar="N",
         help="Limit tree depth to N moves (use with --tree for debugging)"
     )
+    parser.add_argument(
+        "--parallel",
+        type=int,
+        nargs="?",
+        const=0,  # 0 means auto-detect
+        metavar="N",
+        help="Use N parallel workers (use with --tree). Default: auto-detect CPU count"
+    )
 
     args = parser.parse_args()
 
@@ -2429,7 +2586,11 @@ Examples:
 
     # Export full game tree
     if args.tree:
-        explore_game_tree(args.tree, verbose=not args.quiet, max_depth=args.depth)
+        if args.parallel is not None:
+            num_workers = args.parallel if args.parallel > 0 else None
+            explore_game_tree_parallel(args.tree, verbose=not args.quiet, max_depth=args.depth, num_workers=num_workers)
+        else:
+            explore_game_tree(args.tree, verbose=not args.quiet, max_depth=args.depth)
         return
 
     # Find shortest win using iterative deepening
