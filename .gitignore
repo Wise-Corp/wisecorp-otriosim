@@ -29,3 +29,7 @@ Thumbs.db
 
 # txt outputs
 *.txt
+
+# compiled binary
+otrio_explore
+otrio_explore.exe
