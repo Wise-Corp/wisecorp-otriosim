@@ -5,7 +5,7 @@ CFLAGS = -O3 -march=native -Wall -Wextra
 LDFLAGS = -lpthread
 
 # Default target
-all: otrio_explore extract_strategy
+all: otrio_explore extract_strategy find_strategy
 
 otrio_explore: otrio_explore.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
@@ -13,12 +13,15 @@ otrio_explore: otrio_explore.c
 extract_strategy: extract_strategy.c
 	$(CC) $(CFLAGS) -o $@ $<
 
+find_strategy: find_strategy.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
 # Debug build
 debug: CFLAGS = -g -O0 -Wall -Wextra -DDEBUG
-debug: otrio_explore extract_strategy
+debug: otrio_explore extract_strategy find_strategy
 
 clean:
-	rm -f otrio_explore otrio_explore.exe extract_strategy extract_strategy.exe
+	rm -f otrio_explore otrio_explore.exe extract_strategy extract_strategy.exe find_strategy find_strategy.exe
 
 # Test with depth 4
 test: otrio_explore
