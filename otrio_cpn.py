@@ -2013,23 +2013,25 @@ def analyze_branch(state, blue_pos, blue_size, context, verbose=True, depth=0, m
     return "BLUE" if all_blue_wins else "UNKNOWN"
 
 
-def explore_game_tree(output_file, verbose=True):
+def explore_game_tree(output_file, verbose=True, max_depth=None):
     """
     Exhaustively explore ALL game sequences until terminal states.
     Streams directly to JSON file to minimize memory usage.
 
     JSON structure:
     - Internal: {"m": "SA1", "c": [...]}
-    - Leaf: {"m": "LC3", "r": "B"|"R"|"D"}
-      r = B (BLUE wins), R (RED wins), D (DRAW)
+    - Leaf: {"m": "LC3", "r": "B"|"R"|"D"|"L"}
+      r = B (BLUE wins), R (RED wins), D (DRAW), L (depth Limit)
     """
     print("=" * 60)
     print("EXHAUSTIVE GAME TREE (streaming)")
     print("=" * 60)
     print(f"Output: {output_file}")
+    if max_depth:
+        print(f"Max depth: {max_depth}")
     print()
 
-    stats = {"nodes": 0, "B": 0, "R": 0, "D": 0}
+    stats = {"nodes": 0, "B": 0, "R": 0, "D": 0, "L": 0}
     last_report = [0]
 
     def get_mem_mb():
@@ -2042,9 +2044,10 @@ def explore_game_tree(output_file, verbose=True):
     def report():
         mem = get_mem_mb()
         mem_str = f"  Mem: {mem:.0f}MB" if mem > 0 else ""
-        print(f"  Nodes: {stats['nodes']:,}  B:{stats['B']:,} R:{stats['R']:,} D:{stats['D']:,}{mem_str}")
+        limit_str = f" L:{stats['L']:,}" if max_depth else ""
+        print(f"  Nodes: {stats['nodes']:,}  B:{stats['B']:,} R:{stats['R']:,} D:{stats['D']:,}{limit_str}{mem_str}")
 
-    def write_tree(f, state, is_first_child):
+    def write_tree(f, state, is_first_child, depth):
         """Stream tree node directly to file."""
         stats["nodes"] += 1
 
@@ -2084,6 +2087,12 @@ def explore_game_tree(output_file, verbose=True):
             f.write(f'{{"m":"{move_str}","r":"D"}}')
             return
 
+        # Terminal: Depth limit (depth = number of moves played)
+        if max_depth and depth >= max_depth:
+            stats["L"] += 1
+            f.write(f'{{"m":"{move_str}","r":"L"}}')
+            return
+
         # Internal node
         if move_str:
             f.write(f'{{"m":"{move_str}","c":[')
@@ -2093,9 +2102,9 @@ def explore_game_tree(output_file, verbose=True):
         # Write children
         for i, (pos, size) in enumerate(moves):
             new_state = state.make_move(pos, size)
-            write_tree(f, new_state, i == 0)
+            write_tree(f, new_state, i == 0, depth + 1)
 
-        f.write("]}")
+        f.write("]}\n")
 
     print("Streaming to file...")
     if verbose:
@@ -2103,8 +2112,8 @@ def explore_game_tree(output_file, verbose=True):
 
     with open(output_file, 'w') as f:
         f.write('{"tree":')
-        write_tree(f, OtrioGameState(), True)
-        f.write(f',"stats":{{"nodes":{stats["nodes"]},"B":{stats["B"]},"R":{stats["R"]},"D":{stats["D"]}}}}}')
+        write_tree(f, OtrioGameState(), True, 0)
+        f.write(f'\n,"stats":{{"nodes":{stats["nodes"]},"B":{stats["B"]},"R":{stats["R"]},"D":{stats["D"]},"L":{stats["L"]}}}}}\n')
 
     print()
     print("=" * 60)
@@ -2112,6 +2121,8 @@ def explore_game_tree(output_file, verbose=True):
     print(f"BLUE wins: {stats['B']:,}")
     print(f"RED wins: {stats['R']:,}")
     print(f"Draws: {stats['D']:,}")
+    if max_depth:
+        print(f"Depth limit: {stats['L']:,}")
     print(f"\nWrote to {output_file}")
 
 
@@ -2403,6 +2414,12 @@ Examples:
         metavar="FILE",
         help="Export full game tree to JSON file (explores ALL sequences)"
     )
+    parser.add_argument(
+        "--depth",
+        type=int,
+        metavar="N",
+        help="Limit tree depth to N moves (use with --tree for debugging)"
+    )
 
     args = parser.parse_args()
 
@@ -2412,7 +2429,7 @@ Examples:
 
     # Export full game tree
     if args.tree:
-        explore_game_tree(args.tree, verbose=not args.quiet)
+        explore_game_tree(args.tree, verbose=not args.quiet, max_depth=args.depth)
         return
 
     # Find shortest win using iterative deepening
